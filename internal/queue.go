@@ -2,11 +2,14 @@ package internal
 
 import (
 	"container/list"
+	"sync"
 )
 
 type Queue struct {
 	items *list.List
 }
+
+var mutex = &sync.Mutex{}
 
 func NewQueue() *Queue {
 	return &Queue{
@@ -15,10 +18,14 @@ func NewQueue() *Queue {
 }
 
 func (q *Queue) Enqueue(item interface{}) {
+	mutex.Lock()
+	defer mutex.Unlock()
 	q.items.PushBack(item)
 }
 
 func (q *Queue) Dequeue() interface{} {
+	mutex.Lock()
+	defer mutex.Unlock()
 	if q.items.Len() == 0 {
 		return nil
 	}
