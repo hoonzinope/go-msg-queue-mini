@@ -7,20 +7,21 @@ import (
 	"time"
 )
 
-func Produce(ctx context.Context, queue *Queue) {
+func Produce(ctx context.Context, queue *Queue, name string) {
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		default:
 			item := util.GenerateItem() // Generate a new item
-			_produce(item, queue)
-			time.Sleep(1 * time.Second) // Simulate some delay in producing items
+			_produce(item, queue, name)
+			second := util.GenerateNumber(1, 5)             // Generate a random number between 1 and 5
+			time.Sleep(time.Duration(second) * time.Second) // Sleep for the generated number of seconds
 		}
 	}
 }
 
-func _produce(item interface{}, queue *Queue) {
-	queue.Enqueue(item)                         // Enqueue the item
-	fmt.Printf("Produced: %s\n", item.(string)) // Log the produced item
+func _produce(item interface{}, queue *Queue, name string) {
+	queue.Enqueue(item)                                     // Enqueue the item
+	fmt.Printf("Produced by %s: %s\n", name, item.(string)) // Log the produced item
 }

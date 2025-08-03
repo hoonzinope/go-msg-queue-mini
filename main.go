@@ -19,12 +19,19 @@ func main() {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		internal.Consume(ctx, queue) // Start consuming messages
+		internal.Consume(ctx, queue, "consumer1") // Start consuming messages
 	}()
+
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		internal.Produce(ctx, queue) // Start producing messages
+		internal.Produce(ctx, queue, "producer1") // Start producing messages
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		internal.Produce(ctx, queue, "producer2") // Start producing messages
 	}()
 
 	fmt.Println("Message queue is running. Press Ctrl+C to stop.")
