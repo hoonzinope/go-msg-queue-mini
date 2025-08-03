@@ -4,22 +4,33 @@ import (
 	"context"
 	"fmt"
 	"go-msg-queue-mini/internal"
+	"os"
+	"os/signal"
 	"sync"
+	"syscall"
+	"time"
 )
 
-var ctx = context.Background()
+var ctx, cancel = context.WithTimeout(context.Background(), 10*time.Second)
 
 func main() {
 	fmt.Println("Starting message queue...")
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	// Create a new queue
 	queue := internal.NewQueue()
 
 	wg := sync.WaitGroup{}
-	defer wg.Wait()
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		internal.Consume(ctx, queue, "consumer1") // Start consuming messages
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		internal.Consume(ctx, queue, "consumer2") // Start consuming messages
 	}()
 
 	wg.Add(1)
@@ -35,9 +46,10 @@ func main() {
 	}()
 
 	fmt.Println("Message queue is running. Press Ctrl+C to stop.")
-	// Wait for the context to be done (in a real application, you would handle this with a signal handler)
-	<-ctx.Done()
+
+	<-quit
 	fmt.Println("Stopping message queue...")
+	cancel()  // Cancel the context to stop all goroutines
+	wg.Wait() // Wait for all goroutines to finish
 	fmt.Println("Message queue stopped.")
-	wg.Done()
 }
