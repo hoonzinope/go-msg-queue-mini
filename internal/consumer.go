@@ -13,11 +13,8 @@ func Consume(ctx context.Context, queue *Queue, name string) {
 			_shutdown(queue, name) // Consume remaining messages before exiting
 			fmt.Printf("Consumer %s stopped.\n", name)
 			return
-		case item := <-queue.msgSignal: // Wait for a new message
-			if item != nil {
-				_consume(queue, name)
-			}
-
+		case <-queue.msgSignal: // Wait for a new message
+			_consume(queue, name)
 		}
 	}
 }
