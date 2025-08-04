@@ -7,14 +7,15 @@ import (
 )
 
 func MonitoringStatus(ctx context.Context, queue *Queue) {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			fmt.Println("Monitoring stopped.")
 			return
-		default:
+		case <-ticker.C:
 			fmt.Printf("-----Queue Length: %d-----\n", queue.Length())
-			time.Sleep(5 * time.Second) // Monitor every 5 seconds
 		}
 	}
 }
