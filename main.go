@@ -8,10 +8,9 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
-	"time"
 )
 
-var ctx, cancel = context.WithTimeout(context.Background(), 10*time.Second)
+var ctx, cancel = context.WithCancel(context.Background())
 
 func main() {
 	fmt.Println("Starting message queue...")
@@ -46,6 +45,12 @@ func main() {
 	}()
 
 	fmt.Println("Message queue is running. Press Ctrl+C to stop.")
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		internal.MonitoringStatus(ctx, queue) // Start monitoring the queue status
+	}()
 
 	<-quit
 	fmt.Println("Stopping message queue...")

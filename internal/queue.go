@@ -44,5 +44,13 @@ func (q *Queue) Dequeue() interface{} {
 }
 
 func (q *Queue) IsEmpty() bool {
+	q.mutex.Lock()
+	defer q.mutex.Unlock()
 	return q.items.Len() == 0
+}
+
+func (q *Queue) Length() int {
+	q.mutex.Lock()
+	defer q.mutex.Unlock()
+	return q.items.Len()
 }
