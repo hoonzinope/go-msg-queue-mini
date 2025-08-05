@@ -1,0 +1,5 @@
+persistence:
+  type: file # memory, file, redis, etc.
+  options:
+    dirs-path: /data/persistence
+  # type : memory # Use in-memory persistence for simplicity
