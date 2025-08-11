@@ -12,6 +12,8 @@ type Config struct {
 		Type    string `yaml:"type"`
 		Options struct {
 			DirsPath string `yaml:"dirs-path"`
+			MaxSize  int    `yaml:"max-size"` // Maximum size of the file in MB
+			MaxAge   int    `yaml:"max-age"`  // Maximum age of the file in days
 		} `yaml:"options"`
 	} `yaml:"persistence"`
 }

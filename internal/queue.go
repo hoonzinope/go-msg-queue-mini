@@ -1,56 +1,27 @@
 package internal
 
-import (
-	"container/list"
-	"sync"
-)
-
-type Queue struct {
-	items     *list.List
-	mutex     sync.Mutex
-	msgSignal chan interface{} // Channel to signal new messages
+type ConsumerStatus struct {
+	ConsumerID string
+	LastOffset int64
+	Lag        int64
 }
 
-func NewQueue() *Queue {
-	return &Queue{
-		items:     list.New(),
-		msgSignal: make(chan interface{}, 1),
-		mutex:     sync.Mutex{},
-	}
+type QueueStatus struct {
+	QueueType        string
+	ActiveConsumers  int
+	ExtraInfo        map[string]interface{}
+	ConsumerStatuses map[string]ConsumerStatus
 }
 
-func (q *Queue) Enqueue(item interface{}) {
-	q.mutex.Lock()
-	defer q.mutex.Unlock()
-
-	q.items.PushBack(item)
-	select {
-	case q.msgSignal <- item: // Signal for consumers that a new message is available
-	default:
-		// If the channel is full, drop the signal
-		return
-	}
+type Msg struct {
+	Id   int64
+	Item interface{}
 }
 
-func (q *Queue) Dequeue() interface{} {
-	q.mutex.Lock()
-	defer q.mutex.Unlock()
-	if q.items.Len() == 0 {
-		return nil
-	}
-	front := q.items.Front()
-	q.items.Remove(front)
-	return front.Value
-}
-
-func (q *Queue) IsEmpty() bool {
-	q.mutex.Lock()
-	defer q.mutex.Unlock()
-	return q.items.Len() == 0
-}
-
-func (q *Queue) Length() int {
-	q.mutex.Lock()
-	defer q.mutex.Unlock()
-	return q.items.Len()
+type Queue interface {
+	Enqueue(item interface{}) error
+	Dequeue(consumerID string, maxCount int) ([]Msg, error)
+	Ack(consumerID string, messageID int64) error
+	Status() (QueueStatus, error)
+	Shutdown() error
 }
