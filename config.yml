@@ -1,5 +1,8 @@
 persistence:
   type: file # memory, file, redis, etc.
   options:
-    dirs-path: /data/persistence
+    dirs-path: ./data/persistence
+    max-size: 1 # Maximum size of the file in MB
+    max-age: 1 # Maximum age of the file in days
+    
   # type : memory # Use in-memory persistence for simplicity
