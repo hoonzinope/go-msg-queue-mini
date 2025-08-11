@@ -288,7 +288,7 @@ func readMsgFromSegmentFile(filepath string, lastOffset int64, maxCount int) ([]
 			fmt.Printf("invalid JSON line: %s", scanner.Text())
 			continue
 		}
-		// m 처리 로직
+		// Check if the message ID is greater than the last offset
 		if msg.Id > lastOffset {
 			messages = append(messages, msg)
 			count++
@@ -342,7 +342,7 @@ func splitSegmentFile() (string, error) {
 	}
 	segmentFile.Close()
 
-	oldSegmentFilePath := filepath.Join(filepath.Dir(segmentPath), fmt.Sprintf("segment_%d.log", time.Now().UnixNano()))
+	oldSegmentFilePath := filepath.Join(filepath.Dir(dirs), fmt.Sprintf("segment_%d.log", time.Now().UnixNano()))
 	if err := os.Rename(segmentPath, oldSegmentFilePath); err != nil {
 		return "", fmt.Errorf("error renaming segment file: %v", err)
 	}
@@ -364,7 +364,7 @@ func deleteSegmentFile(minMessageID int64) error {
 	for segmentFileName, lastMessageID := range segmentFileMetadataMap {
 		if lastMessageID < minMessageID {
 			// Delete the segment file
-			err := os.Remove(filepath.Join(segmentPath, segmentFileName))
+			err := os.Remove(segmentFileName)
 			if err != nil {
 				return fmt.Errorf("error deleting segment file %s: %v", segmentFileName, err)
 			}
@@ -396,6 +396,7 @@ func writeSegmentFileMetadata() error {
 	}
 	minMessageID := int64(0)
 	segmentMetadata.Truncate(0) // Clear the file before writing new metadata
+	segmentMetadata.Seek(0, 0)  // Reset the file pointer to the beginning
 	for segmentFileName, lastMessageID := range segmentFileMetadataMap {
 		if _, err := segmentMetadata.WriteString(fmt.Sprintf("%s %d\n", segmentFileName, lastMessageID)); err != nil {
 			return fmt.Errorf("error writing segment file metadata: %v", err)

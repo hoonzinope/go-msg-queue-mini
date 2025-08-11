@@ -48,12 +48,9 @@ func (q *memoryQueue) Dequeue(consumerID string, maxCount int) ([]internal.Msg, 
 		lastOffset = -1 // If no offset exists, start from the beginning
 	}
 	messages := make([]internal.Msg, 0, maxCount)
-	for i := lastOffset + 1; i < lastOffset+maxCount && i < int(len(q.items)); i++ {
+	for i := lastOffset + 1; i < len(q.items) && len(messages) < maxCount; i++ {
 		msg := q.items[i]
 		messages = append(messages, msg)
-		if len(messages) >= int(maxCount) {
-			break
-		}
 	}
 	if len(messages) == 0 {
 		return nil, fmt.Errorf("no new messages")
@@ -85,9 +82,9 @@ func (q *memoryQueue) Ack(consumerID string, messageID int64) error {
 		}
 	}
 	if minOffset >= 0 {
-		q.items = q.items[minOffset:] // Remove acknowledged messages from the queue
+		q.items = q.items[minOffset+1:] // Remove acknowledged messages from the queue
 		for consumerID := range q.offsetMap {
-			q.offsetMap[consumerID] -= int(minOffset) // Adjust offsets for all consumers
+			q.offsetMap[consumerID] -= int(minOffset + 1) // Adjust offsets for all consumers
 			if q.offsetMap[consumerID] < 0 {
 				q.offsetMap[consumerID] = 0 // Ensure offsets do not go negative
 			}
@@ -121,10 +118,14 @@ func (q *memoryQueue) Status() (internal.QueueStatus, error) {
 	}
 
 	for consumerID, offset := range q.offsetMap {
+		lag := int64(len(q.items) - offset - 1) // Calculate lag
+		if lag < 0 {
+			lag = 0 // Ensure lag is not negative
+		}
 		status.ConsumerStatuses[consumerID] = internal.ConsumerStatus{
 			ConsumerID: consumerID,
 			LastOffset: int64(offset),
-			Lag:        int64(len(q.items) - offset - 1), // Calculate lag
+			Lag:        lag,
 		}
 	}
 
