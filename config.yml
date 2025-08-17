@@ -6,3 +6,5 @@ persistence:
   #   max-age: 1 # Maximum age of the file in days
     
   type : memory # Use in-memory persistence for simplicity
+
+max-retry: 3 # Maximum number of retries for message processing

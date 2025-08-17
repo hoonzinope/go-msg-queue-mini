@@ -7,9 +7,8 @@ import (
 	"time"
 )
 
-var maxRetry = 3 // Maximum number of retries for message processing
-
 type memoryQueue struct {
+	maxRetry  int
 	items     []internal.Msg // Use a slice to store messages
 	dlq       []internal.Msg // Dead-letter queue for failed messages
 	mutex     sync.Mutex
@@ -17,8 +16,9 @@ type memoryQueue struct {
 	retryMap  map[string]map[int64]int // Retry map to track retries for each message
 }
 
-func NewMemoryQueue() *memoryQueue {
+func NewMemoryQueue(maxRetryCount int) *memoryQueue {
 	return &memoryQueue{
+		maxRetry:  maxRetryCount,
 		items:     make([]internal.Msg, 0),
 		dlq:       make([]internal.Msg, 0), // Initialize the dead-letter queue
 		mutex:     sync.Mutex{},
@@ -116,7 +116,7 @@ func (q *memoryQueue) Nack(consumerID string, messageID int64) error {
 	} else {
 		q.retryMap[consumerID][messageID]++ // Increment retry count
 	}
-	if q.retryMap[consumerID][messageID] > maxRetry {
+	if q.retryMap[consumerID][messageID] > q.maxRetry {
 		// If max retries exceeded, move to dead-letter queue
 		for i, msg := range q.items {
 			if msg.Id == messageID {

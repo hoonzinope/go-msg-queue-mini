@@ -9,10 +9,11 @@ import (
 )
 
 type fileQueue struct {
-	mutex sync.Mutex
+	maxRetry int // Maximum number of retries for message processing
+	mutex    sync.Mutex
 }
 
-func NewFileQueue(logdirs string, maxSizeMB int, maxAgeDays int) (*fileQueue, error) {
+func NewFileQueue(logdirs string, maxSizeMB int, maxAgeDays int, maxRetry int) (*fileQueue, error) {
 	if logdirs == "" {
 		fmt.Println("Log directory path is empty - error initializing file queue")
 		return nil, fmt.Errorf("log directory path is empty")
@@ -31,7 +32,8 @@ func NewFileQueue(logdirs string, maxSizeMB int, maxAgeDays int) (*fileQueue, er
 	}
 
 	fileQueue := &fileQueue{
-		mutex: sync.Mutex{},
+		mutex:    sync.Mutex{},
+		maxRetry: maxRetry,
 	}
 
 	return fileQueue, nil
@@ -103,8 +105,9 @@ func (q *fileQueue) Nack(consumerID string, messageID int64) error {
 		return fmt.Errorf("message ID is zero")
 	}
 
-	// Handle negative acknowledgment logic here if needed
-	// For now, we just return nil as no specific action is defined
+	if err := WriteRetry(consumerID, messageID, q.maxRetry); err != nil {
+		return fmt.Errorf("error writing retry for consumer %s: %v", consumerID, err)
+	}
 	return nil
 }
 

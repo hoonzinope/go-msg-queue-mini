@@ -31,6 +31,13 @@ var segmentFileMetadataMap map[string]int64
 var maxSize int // Maximum size of the segment file in MB
 var maxAge int  // Maximum age of the segment file in days
 
+var retryLogPath string
+var retryMap map[string]map[int64]int // Maps consumer ID to a map of message IDs and their retry counts
+var retryFile *os.File
+
+var dlqLogPath string
+var dlqFile *os.File
+
 var mutex = &sync.Mutex{} // Mutex to protect concurrent access
 
 var latestMessageID int64 // Track the latest message ID
@@ -118,6 +125,44 @@ func OpenFiles(logdirs string, maxSizeMB int, maxAgeDays int) error {
 		}
 	}
 
+	retryLogPath = filepath.Join(dirs, "retry.state")
+	retryMap = make(map[string]map[int64]int)
+	if _, err := os.Stat(retryLogPath); os.IsNotExist(err) {
+		// create retry log file if it does not exist
+		retryFile, err = os.Create(retryLogPath)
+		if err != nil {
+			segmentFile.Close()     // Close segment file if retry file creation fails
+			offsetFile.Close()      // Close offset file if retry file creation fails
+			segmentMetadata.Close() // Close segment metadata file if retry file creation fails
+			return fmt.Errorf("error creating retry log file: %v", err)
+		}
+	} else {
+		// If the retry log file exists, we can read it to restore the retry map
+		retryFile, err = os.Open(retryLogPath)
+		if err != nil {
+			segmentFile.Close()     // Close segment file if retry file opening fails
+			offsetFile.Close()      // Close offset file if retry file opening fails
+			segmentMetadata.Close() // Close segment metadata file if retry file opening fails
+			return fmt.Errorf("error opening retry log file: %v", err)
+		}
+		var consumerID string
+		var messageID int64
+		var retryCount int
+		for {
+			_, err := fmt.Fscanf(retryFile, "%s %d %d\n", &consumerID, &messageID, &retryCount)
+			if err != nil {
+				if err == io.EOF {
+					break // End of file reached
+				}
+				return fmt.Errorf("error reading retry log file: %v", err)
+			}
+			if _, ok := retryMap[consumerID]; !ok {
+				retryMap[consumerID] = make(map[int64]int) // Initialize retry map
+			}
+			retryMap[consumerID][messageID] = retryCount // Restore retry count
+		}
+	}
+
 	return nil
 }
 
@@ -155,6 +200,20 @@ func CloseFiles() error {
 			errMsg += fmt.Sprintf("segment metadata file: %v", err)
 		}
 		segmentMetadata = nil
+	}
+
+	if retryFile != nil {
+		if err := retryFile.Close(); err != nil {
+			errMsg += fmt.Sprintf("retry file: %v", err)
+		}
+		retryFile = nil
+	}
+
+	if dlqFile != nil {
+		if err := dlqFile.Close(); err != nil {
+			errMsg += fmt.Sprintf("dead-letter queue file: %v", err)
+		}
+		dlqFile = nil
 	}
 
 	if errMsg != "" {
@@ -202,6 +261,28 @@ func WriteMsgToSegment(msg internal.Msg) error {
 	// Update the latest message ID
 	if msg.Id > latestMessageID {
 		latestMessageID = msg.Id
+	}
+
+	return nil
+}
+
+func writeMsgToDLQ(msg internal.Msg) error {
+
+	if dlqFile == nil {
+		var err error
+		dlqLogPath = filepath.Join(dirs, "dead_letter_queue.log")
+		dlqFile, err = os.OpenFile(dlqLogPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			return fmt.Errorf("error opening dead-letter queue file: %v", err)
+		}
+	}
+
+	data, err := json.Marshal(msg)
+	if err != nil {
+		return fmt.Errorf("error marshaling message to JSON for DLQ: %v", err)
+	}
+	if _, err := dlqFile.Write(append(data, '\n')); err != nil {
+		return fmt.Errorf("error writing message to dead-letter queue file: %v", err)
 	}
 
 	return nil
@@ -284,11 +365,39 @@ func readMsgFromSegmentFile(filepath string, lastOffset int64, maxCount int) ([]
 	return messages, nil
 }
 
+func getMsgFromSegmentFile(filePath string, messageID int64) (internal.Msg, error) {
+	f, err := os.Open(filePath)
+	if err != nil {
+		return internal.Msg{}, fmt.Errorf("error opening segment file %s: %v", filePath, err)
+	}
+	defer f.Close()
+	var msg internal.Msg
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		if err := json.Unmarshal(scanner.Bytes(), &msg); err != nil {
+			fmt.Printf("invalid JSON line: %s", scanner.Text())
+			continue
+		}
+		if msg.Id == messageID {
+			return msg, nil // Return the message if found
+		}
+	}
+	return internal.Msg{}, fmt.Errorf("message with ID %d not found in segment file %s", messageID, filePath)
+}
+
 func WriteOffset(consumer_id string, messageID int64) error {
 	mutex.Lock()
 	defer mutex.Unlock()
 	offsetMap[consumer_id] = messageID
 
+	if err := writeOffsetToFile(); err != nil {
+		return fmt.Errorf("error writing offset to file: %v", err)
+	}
+
+	return nil
+}
+
+func writeOffsetToFile() error {
 	// 1. 임시 파일 생성
 	tempFile, err := os.CreateTemp(filepath.Dir(offsetLogPath), "offset.temp")
 	if err != nil {
@@ -314,6 +423,92 @@ func WriteOffset(consumer_id string, messageID int64) error {
 	if err := os.Rename(tempFile.Name(), offsetLogPath); err != nil {
 		os.Remove(tempFile.Name())
 		return fmt.Errorf("error renaming temporary offset file: %v", err)
+	}
+
+	return nil
+}
+
+func WriteRetry(consumerID string, messageID int64, maxRetry int) error {
+	mutex.Lock()
+	defer mutex.Unlock()
+
+	if retryMap == nil {
+		retryMap = make(map[string]map[int64]int)
+	}
+
+	if _, exists := retryMap[consumerID]; !exists {
+		retryMap[consumerID] = make(map[int64]int) // Initialize retry map for the consumer
+	}
+
+	if _, exists := retryMap[consumerID][messageID]; !exists {
+		retryMap[consumerID][messageID] = 0 // Initialize retry count
+	}
+
+	retryMap[consumerID][messageID]++ // Increment retry count
+
+	if retryMap[consumerID][messageID] > maxRetry {
+		// If max retries exceeded, move to dead-letter queue
+		msg := internal.Msg{Id: messageID, Item: nil} // find a message for dead-letter queue
+		fileNames := make([]string, 0, len(segmentFileMetadataMap))
+		for fileName := range segmentFileMetadataMap {
+			fileNames = append(fileNames, fileName)
+		}
+		if _, err := os.Stat(filepath.Join(dirs, "segments.log")); err == nil {
+			fileNames = append(fileNames, "segments.log") // Include the current segment file
+		}
+
+		sort.Strings(fileNames)
+		var found bool
+		for _, fileName := range fileNames {
+			filePath := filepath.Join(dirs, fileName)
+			var err error
+			msg, err = getMsgFromSegmentFile(filePath, messageID)
+			if err == nil {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("message with ID %d not found in any segment file", messageID)
+		}
+
+		if err := writeMsgToDLQ(msg); err != nil {
+			return fmt.Errorf("error writing message to dead-letter queue: %v", err)
+		}
+		offsetMap[consumerID] = messageID
+		if err := writeOffsetToFile(); err != nil {
+			return fmt.Errorf("error writing offset to file after moving to DLQ: %v", err)
+		}
+		delete(retryMap[consumerID], messageID) // Remove from retry map
+		if len(retryMap[consumerID]) == 0 {
+			delete(retryMap, consumerID) // Clean up empty retry map
+		}
+	}
+
+	// temp file creation
+	tempFile, err := os.CreateTemp(filepath.Dir(retryLogPath), "retry.temp")
+	if err != nil {
+		return fmt.Errorf("error creating temporary retry file: %v", err)
+	}
+	// Write the retry map to the temporary file
+	for consumerID, messages := range retryMap {
+		for messageID, retryCount := range messages {
+			if _, err := tempFile.WriteString(fmt.Sprintf("%s %d %d\n", consumerID, messageID, retryCount)); err != nil {
+				tempFile.Close()
+				os.Remove(tempFile.Name()) // Remove temp file on error
+				return fmt.Errorf("error writing retry to temporary file: %v", err)
+			}
+		}
+	}
+	// Close the temporary file
+	if err := tempFile.Close(); err != nil {
+		os.Remove(tempFile.Name()) // Remove temp file on error
+		return fmt.Errorf("error closing temporary retry file: %v", err)
+	}
+	// Rename the temporary file to the original retry log path
+	if err := os.Rename(tempFile.Name(), retryLogPath); err != nil {
+		os.Remove(tempFile.Name()) // Remove temp file on error
+		return fmt.Errorf("error renaming temporary retry file: %v", err)
 	}
 
 	return nil
