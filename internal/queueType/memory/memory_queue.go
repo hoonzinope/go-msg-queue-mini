@@ -7,17 +7,23 @@ import (
 	"time"
 )
 
+var maxRetry = 3 // Maximum number of retries for message processing
+
 type memoryQueue struct {
 	items     []internal.Msg // Use a slice to store messages
+	dlq       []internal.Msg // Dead-letter queue for failed messages
 	mutex     sync.Mutex
-	offsetMap map[string]int // Offset map for each consumer
+	offsetMap map[string]int           // Offset map for each consumer
+	retryMap  map[string]map[int64]int // Retry map to track retries for each message
 }
 
 func NewMemoryQueue() *memoryQueue {
 	return &memoryQueue{
 		items:     make([]internal.Msg, 0),
+		dlq:       make([]internal.Msg, 0), // Initialize the dead-letter queue
 		mutex:     sync.Mutex{},
-		offsetMap: make(map[string]int), // Initialize the offset map
+		offsetMap: make(map[string]int),           // Initialize the offset map
+		retryMap:  make(map[string]map[int64]int), // Initialize the retry map
 	}
 }
 
@@ -93,6 +99,41 @@ func (q *memoryQueue) Ack(consumerID string, messageID int64) error {
 	return nil
 }
 
+func (q *memoryQueue) Nack(consumerID string, messageID int64) error {
+	q.mutex.Lock()
+	defer q.mutex.Unlock()
+
+	if consumerID == "" {
+		return fmt.Errorf("consumer ID is empty")
+	}
+	if messageID == 0 {
+		return fmt.Errorf("message ID is zero")
+	}
+
+	if _, ok := q.retryMap[consumerID]; !ok {
+		q.retryMap[consumerID] = make(map[int64]int) // Initialize retry map
+		q.retryMap[consumerID][messageID] = 1        // Initialize retry count
+	} else {
+		q.retryMap[consumerID][messageID]++ // Increment retry count
+	}
+	if q.retryMap[consumerID][messageID] > maxRetry {
+		// If max retries exceeded, move to dead-letter queue
+		for i, msg := range q.items {
+			if msg.Id == messageID {
+				q.dlq = append(q.dlq, msg)                // Add to dead-letter queue
+				q.offsetMap[consumerID] = i               // Update offset for the consumer
+				delete(q.retryMap[consumerID], messageID) // Remove from retry map
+				if len(q.retryMap[consumerID]) == 0 {
+					delete(q.retryMap, consumerID) // Clean up empty retry map
+				}
+				fmt.Printf("Message %d moved to dead-letter queue after max retries\n", messageID)
+				return nil
+			}
+		}
+	}
+	return nil
+}
+
 func (q *memoryQueue) Shutdown() error {
 	q.mutex.Lock()
 	defer q.mutex.Unlock()
@@ -100,6 +141,8 @@ func (q *memoryQueue) Shutdown() error {
 	// Clear the queue and offsets
 	q.items = nil
 	q.offsetMap = make(map[string]int)
+	q.retryMap = make(map[string]map[int64]int)
+	q.dlq = nil
 	fmt.Println("Memory queue has been shut down.")
 	return nil
 }
@@ -112,7 +155,8 @@ func (q *memoryQueue) Status() (internal.QueueStatus, error) {
 		QueueType:       "memory",
 		ActiveConsumers: len(q.offsetMap),
 		ExtraInfo: map[string]interface{}{
-			"TotalMessages": len(q.items),
+			"TotalMessages":       len(q.items),
+			"DeadLetterQueueSize": len(q.dlq),
 		},
 		ConsumerStatuses: make(map[string]internal.ConsumerStatus),
 	}

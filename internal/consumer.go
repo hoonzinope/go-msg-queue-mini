@@ -3,6 +3,7 @@ package internal
 import (
 	"context"
 	"fmt"
+	"time"
 )
 
 func Consume(ctx context.Context, queue Queue, name string) {
@@ -25,6 +26,8 @@ func _consume(queue Queue, name string) {
 			fmt.Printf("Consumed by %s: %s\n", name, msg.Item.(string)) // Log the consumed item
 			if err := queue.Ack(name, msg.Id); err != nil {
 				fmt.Printf("Error acknowledging message %d for %s: %v\n", msg.Id, name, err)
+				queue.Nack(name, msg.Id)           // If Ack fails, Nack the message
+				time.Sleep(100 * time.Millisecond) // Sleep to avoid busy loop
 			}
 		}
 	}
