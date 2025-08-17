@@ -74,26 +74,39 @@ func (q *memoryQueue) Ack(consumerID string, messageID int64) error {
 	if messageID == 0 {
 		return fmt.Errorf("message ID is zero")
 	}
+	var found bool
 	for i, msg := range q.items {
 		if msg.Id == messageID {
 			q.offsetMap[consumerID] = int(i) // Update the offset for the consumer
+			found = true
 			break
 		}
 	}
+	if !found {
+		return fmt.Errorf("message with ID %d not found", messageID)
+	}
 
-	minOffset := -1
+	minOffset := -2
 	for _, offset := range q.offsetMap {
-		if minOffset == -1 || offset < minOffset {
+		if offset < minOffset || minOffset == -2 {
 			minOffset = offset // Find the minimum offset across all consumers
 		}
 	}
+	fmt.Println("offsets", q.offsetMap, " Minimum offset:", minOffset)
 	if minOffset >= 0 {
 		q.items = q.items[minOffset+1:] // Remove acknowledged messages from the queue
 		for consumerID := range q.offsetMap {
 			q.offsetMap[consumerID] -= int(minOffset + 1) // Adjust offsets for all consumers
-			if q.offsetMap[consumerID] < 0 {
-				q.offsetMap[consumerID] = 0 // Ensure offsets do not go negative
+			if q.offsetMap[consumerID] < -1 {
+				q.offsetMap[consumerID] = -1 // Ensure offsets do not go negative
 			}
+		}
+	}
+
+	if q.retryMap[consumerID] != nil {
+		delete(q.retryMap[consumerID], messageID) // Remove the message from the retry
+		if len(q.retryMap[consumerID]) == 0 {
+			delete(q.retryMap, consumerID) // Clean up empty retry map for the consumer
 		}
 	}
 	return nil
@@ -109,7 +122,20 @@ func (q *memoryQueue) Nack(consumerID string, messageID int64) error {
 	if messageID == 0 {
 		return fmt.Errorf("message ID is zero")
 	}
+	// Check if the message exists in the queue
+	var found bool
+	for i, msg := range q.items {
+		if msg.Id == messageID {
+			q.offsetMap[consumerID] = i - 1 // Update the offset (not yet acknowledged) for the consumer
+			found = true
+			break
+		}
+	}
+	if !found {
+		return fmt.Errorf("message with ID %d not found", messageID)
+	}
 
+	// Increment the retry count for the message
 	if _, ok := q.retryMap[consumerID]; !ok {
 		q.retryMap[consumerID] = make(map[int64]int) // Initialize retry map
 		q.retryMap[consumerID][messageID] = 1        // Initialize retry count
@@ -126,7 +152,6 @@ func (q *memoryQueue) Nack(consumerID string, messageID int64) error {
 				if len(q.retryMap[consumerID]) == 0 {
 					delete(q.retryMap, consumerID) // Clean up empty retry map
 				}
-				fmt.Printf("Message %d moved to dead-letter queue after max retries\n", messageID)
 				return nil
 			}
 		}
