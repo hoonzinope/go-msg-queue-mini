@@ -266,22 +266,6 @@ func readMsgFromSegmentFile(filepath string, lastOffset int64, maxCount int) ([]
 	var messages []internal.Msg
 	var msg internal.Msg
 	count := int(0)
-	// for {
-	// 	// _, err := fmt.Fscanf(f, "%v\n", &msg)
-	// 	if err := json.NewDecoder(f).Decode(&msg); err != nil {
-	// 		if err == io.EOF {
-	// 			break // End of file reached
-	// 		}
-	// 		return nil, fmt.Errorf("error reading message from segment file %s: %v", filepath, err)
-	// 	}
-	// 	if msg.Id > lastOffset {
-	// 		messages = append(messages, msg)
-	// 		count++
-	// 		if count >= maxCount {
-	// 			break
-	// 		}
-	// 	}
-	// }
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
 		if err := json.Unmarshal(scanner.Bytes(), &msg); err != nil {

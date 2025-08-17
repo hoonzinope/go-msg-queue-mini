@@ -92,6 +92,22 @@ func (q *fileQueue) Ack(consumerID string, messageID int64) error {
 	return nil
 }
 
+func (q *fileQueue) Nack(consumerID string, messageID int64) error {
+	q.mutex.Lock()
+	defer q.mutex.Unlock()
+
+	if consumerID == "" {
+		return fmt.Errorf("consumer ID is empty")
+	}
+	if messageID == 0 {
+		return fmt.Errorf("message ID is zero")
+	}
+
+	// Handle negative acknowledgment logic here if needed
+	// For now, we just return nil as no specific action is defined
+	return nil
+}
+
 func (q *fileQueue) Shutdown() error {
 	q.mutex.Lock()
 	defer q.mutex.Unlock()
