@@ -1,10 +1,10 @@
 persistence:
-  # type: file # memory, file, redis, etc.
-  # options:
-  #   dirs-path: ./data/persistence
-  #   max-size: 1 # Maximum size of the file in MB
-  #   max-age: 1 # Maximum age of the file in days
+  type: file # memory, file, redis, etc.
+  options:
+    dirs-path: ./data/persistence
+    max-size: 1 # Maximum size of the file in MB
+    max-age: 1 # Maximum age of the file in days
     
-  type : memory # Use in-memory persistence for simplicity
+  # type : memory # Use in-memory persistence for simplicity
 
 max-retry: 3 # Maximum number of retries for message processing

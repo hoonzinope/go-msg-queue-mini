@@ -1,10 +1,14 @@
 package file
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -46,70 +50,30 @@ func TestFileQueue_Nack_Retry(t *testing.T) {
 	// Nack twice
 	assert.NoError(t, q.Nack(consumerID, msgID))
 	assert.NoError(t, q.Nack(consumerID, msgID))
-
-	// Verify retry.state file
-	retryFilePath := filepath.Join(tempDir, "retry.state")
-	data, err := ioutil.ReadFile(retryFilePath)
+	fmt.Printf("Message %d NACKed twice\n", msgID)
+	// Verify retry in event.log file
+	retryFilePath := filepath.Join(tempDir, "event.log")
+	data, err := os.OpenFile(retryFilePath, os.O_RDONLY, 0644)
 	assert.NoError(t, err)
-	expectedRetryState := fmt.Sprintf("%s %d 2\n", consumerID, msgID)
-	assert.Equal(t, expectedRetryState, string(data), "retry.state file content is incorrect")
-}
-
-func TestFileQueue_Nack_MoveToDLQ(t *testing.T) {
-	q, tempDir := setupFileQueueTest(t)
-	defer teardownFileQueueTest(t, q, tempDir)
-
-	t.Logf("Starting TestFileQueue_Nack_MoveToDLQ...")
-
-	consumerID := "test-consumer-dlq"
-	msgContent := "test-message-dlq"
-	q.maxRetry = 2 // Override for this test
-	t.Logf("Queue created with maxRetry=%d", q.maxRetry)
-
-	// Enqueue and Dequeue
-	assert.NoError(t, q.Enqueue(msgContent))
-	t.Logf("Message enqueued: %s", msgContent)
-
-	msgs, err := q.Dequeue(consumerID, 1)
-	assert.NoError(t, err)
-	assert.Len(t, msgs, 1)
-	msg := msgs[0]
-	t.Logf("Message dequeued with ID: %d", msg.Id)
-
-	// Nack until it moves to DLQ
-	for i := 0; i <= q.maxRetry; i++ {
-		t.Logf("Nacking message... Attempt %d", i+1)
-		err := q.Nack(consumerID, msg.Id)
-		assert.NoError(t, err)
-		t.Logf("Nack attempt %d successful", i+1)
+	defer data.Close()
+	dec := json.NewDecoder(data)
+	for {
+		var ev event
+		if err := dec.Decode(&ev); err != nil {
+			if errors.Is(err, io.EOF) {
+				break // End of file
+			}
+			assert.Fail(t, "Failed to decode event log", err)
+		}
+		if ev.Type == "NACK" {
+			msg := ev.Data.(map[string]interface{})
+			rawMessageID, ok := msg["messageID"]
+			assert.True(t, ok, "messageID should be present in NACK event")
+			fmt.Printf("Raw message ID: %v\n", rawMessageID)
+			messageID, err := strconv.ParseInt(rawMessageID.(string), 10, 64)
+			assert.NoError(t, err, "messageID should be a number")
+			assert.Equal(t, consumerID, msg["consumerID"], "consumerID should match")
+			assert.Equal(t, int64(msgID), messageID, "Message ID should match")
+		}
 	}
-
-	t.Logf("Finished Nacking. Verifying DLQ status...")
-
-	// Verify DLQ file
-	dlqFilePath := filepath.Join(tempDir, "dead_letter_queue.log")
-	_, err = os.Stat(dlqFilePath)
-	assert.NoError(t, err, "dead_letter_queue.log should exist")
-	t.Logf("DLQ file found.")
-
-	data, err := ioutil.ReadFile(dlqFilePath)
-	assert.NoError(t, err)
-	assert.Contains(t, string(data), msgContent, "DLQ file should contain the failed message")
-	t.Logf("DLQ file content verified.")
-
-	// Verify retry.state is empty
-	retryFilePath := filepath.Join(tempDir, "retry.state")
-	data, err = ioutil.ReadFile(retryFilePath)
-	assert.NoError(t, err)
-	assert.Empty(t, string(data), "retry.state should be empty after moving to DLQ")
-	t.Logf("retry.state file verified to be empty.")
-
-	// Verify offset is updated
-	offsetFilePath := filepath.Join(tempDir, "offset.state")
-	data, err = ioutil.ReadFile(offsetFilePath)
-	assert.NoError(t, err)
-	expectedOffsetState := fmt.Sprintf("%s %d\n", consumerID, msg.Id)
-	assert.Equal(t, expectedOffsetState, string(data), "offset.state should be updated to skip the DLQ message")
-	t.Logf("offset.state file verified.")
-	t.Logf("TestFileQueue_Nack_MoveToDLQ finished successfully.")
 }

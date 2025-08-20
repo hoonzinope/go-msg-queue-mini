@@ -3,594 +3,940 @@ package file
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"go-msg-queue-mini/internal"
 	"io"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"sync"
 	"time"
 )
 
-var dirs string // Directory where log files are stored
+type fileManager struct {
 
-var segmentPath string
-var segmentFile *os.File
+	// path to file queue
+	dirs string
 
-// Maps consumer ID to the last acknowledged message ID
-var offsetLogPath string
-var offsetMap map[string]int64
-var offsetFile *os.File
+	// the name of the file where information are stored
+	eventLog                 string // wal event log
+	snapshotLSN              string // event -> snapshot LSN
+	offsetState              string // event -> offset state
+	retryState               string // event -> retry state
+	segmentFileMetadataState string // event -> segment file metadata
+	deadLetterQueueLog       string // event -> dead-letter queue
 
-// Maps segment file names to their last message ID
-var segmentMetadataPath string
-var segmentMetadata *os.File
-var segmentFileMetadataMap map[string]int64
+	// file handles for the logs
+	eventLogFile *os.File
 
-var maxSize int // Maximum size of the segment file in MB
-var maxAge int  // Maximum age of the segment file in days
+	queue                  []internal.Msg           // Queue to store messages
+	deadLetterQueue        []internal.Msg           // Dead-letter queue for failed messages
+	offsetMap              map[string]int64         // consumerID -> offset
+	retryMap               map[string]map[int64]int // consumerID -> messageID -> retry count
+	segmentFileMetadataMap map[string]int64         // segment file name -> last message ID
 
-var retryLogPath string
-var retryMap map[string]map[int64]int // Maps consumer ID to a map of message IDs and their retry counts
-var retryFile *os.File
+	maxSize    int        // Maximum size of the file in MB
+	maxAge     int        // Maximum age of the file in days
+	appliedLSN int64      // Last applied LSN for the file queue
+	LSN        int64      // Last sequence number for the file queue
+	mutex      sync.Mutex // Mutex for thread-safe operations
 
-var dlqLogPath string
-var dlqFile *os.File
+	// Map to track message ID to index in the queue
+	msgIdToIdx map[int64]int
+}
 
-var mutex = &sync.Mutex{} // Mutex to protect concurrent access
+type event struct {
+	Lsn  int64
+	Ts   int64
+	Type string // Type of event (e.g., "ACK", "NACK", "DLQ" etc.)
+	Data interface{}
+}
 
-var latestMessageID int64 // Track the latest message ID
-
-func OpenFiles(logdirs string, maxSizeMB int, maxAgeDays int) error {
-	mutex.Lock()
-	defer mutex.Unlock()
-	if logdirs == "" {
-		return fmt.Errorf("log directory path is empty")
-	}
-	if _, err := os.Stat(logdirs); os.IsNotExist(err) {
-		return fmt.Errorf("log directory does not exist: %s", logdirs)
-	}
-	dirs = logdirs
-	maxSize = maxSizeMB
-	maxAge = maxAgeDays
-
-	segmentPath = filepath.Join(dirs, "segments.log")
-	var err error
-	segmentFile, err = os.OpenFile(segmentPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		return fmt.Errorf("error opening segment file: %v", err)
+func NewFileManager(logDir string, maxSizeMB int, maxAgeDays int) (*fileManager, error) {
+	if logDir == "" {
+		return nil, fmt.Errorf("log directory path is empty")
 	}
 
-	offsetLogPath = filepath.Join(dirs, "offset.state")
-	offsetMap = make(map[string]int64)
-	if _, err := os.Stat(offsetLogPath); os.IsNotExist(err) {
-		// create offset log file if it does not exist
-		offsetFile, err = os.Create(offsetLogPath)
-		if err != nil {
-			segmentFile.Close() // Close segment file if offset file creation fails
-			return fmt.Errorf("error creating offset log file: %v", err)
+	fm := &fileManager{
+		dirs:                   logDir,
+		maxSize:                maxSizeMB,
+		maxAge:                 maxAgeDays,
+		queue:                  make([]internal.Msg, 0),
+		deadLetterQueue:        make([]internal.Msg, 0),
+		offsetMap:              make(map[string]int64),
+		retryMap:               make(map[string]map[int64]int),
+		segmentFileMetadataMap: make(map[string]int64),
+		msgIdToIdx:             make(map[int64]int),
+		mutex:                  sync.Mutex{},
+	}
+
+	return fm, nil
+}
+
+func (f *fileManager) OpenFiles() error {
+	f.mutex.Lock()
+	defer f.mutex.Unlock()
+
+	f.LSN = 0
+	f.offsetMap = make(map[string]int64)
+	f.retryMap = make(map[string]map[int64]int)
+	f.segmentFileMetadataMap = make(map[string]int64)
+	f.queue = make([]internal.Msg, 0)
+	f.msgIdToIdx = make(map[int64]int) // Initialize the message ID to index map
+
+	if err := f.openSnapshotFile(); err != nil {
+		return err
+	}
+	if f.LSN > 0 {
+		if err := f.openOffsetFile(); err != nil {
+			return err
+		}
+		if err := f.openSegmentFileMetadata(); err != nil {
+			return err
+		}
+		if err := f.openRetryFile(); err != nil {
+			return err
+		}
+		if err := f.openDeadLetterQueueLog(); err != nil {
+			return err
+		}
+		if err := f.replayEventLog(); err != nil {
+			return err
 		}
 	} else {
-		// If the offset log file exists, we can read it to restore the offsets
-		offsetFile, err = os.Open(offsetLogPath)
-		if err != nil {
-			segmentFile.Close() // Close segment file if offset file opening fails
-			return fmt.Errorf("error opening offset log file: %v", err)
-		}
-
-		var consumerID string
-		var offset int64
-		for {
-			_, err := fmt.Fscanf(offsetFile, "%s %d\n", &consumerID, &offset)
-			if err != nil {
-				if err == io.EOF {
-					break // End of file reached
-				}
-				return fmt.Errorf("error reading offset log file: %v", err)
-			}
-			offsetMap[consumerID] = offset
-		}
+		f.offsetState = filepath.Join(f.dirs, "offset.state")
+		f.retryState = filepath.Join(f.dirs, "retry.state")
+		f.segmentFileMetadataState = filepath.Join(f.dirs, "segment_file_metadata.state")
+		f.deadLetterQueueLog = filepath.Join(f.dirs, "dead_letter_queue.log")
 	}
 
-	segmentMetadataPath = filepath.Join(dirs, "segment_metadata.state")
-	if _, err := os.Stat(segmentMetadataPath); os.IsNotExist(err) {
-		// create segment metadata file if it does not exist
-		segmentMetadata, err = os.Create(segmentMetadataPath)
-		if err != nil {
-			segmentFile.Close() // Close segment file if segment metadata file creation fails
-			offsetFile.Close()  // Close offset file if segment metadata file creation fails
-			return fmt.Errorf("error creating segment metadata file: %v", err)
-		}
-	} else {
-		// If the segment metadata file exists, we can read it to restore the metadata
-		segmentMetadata, err = os.Open(segmentMetadataPath)
-		if err != nil {
-			segmentFile.Close() // Close segment file if segment metadata file opening fails
-			offsetFile.Close()  // Close offset file if segment metadata file opening fails
-			return fmt.Errorf("error opening segment metadata file: %v", err)
-		}
-		segmentFileMetadataMap = make(map[string]int64)
-		var segmentFileName string
-		var lastMessageID int64
-		for {
-			_, err := fmt.Fscanf(segmentMetadata, "%s %d\n", &segmentFileName, &lastMessageID)
-			if err != nil {
-				if err == io.EOF {
-					break // End of file reached
-				}
-				return fmt.Errorf("error reading segment metadata file: %v", err)
-			}
-			segmentFileMetadataMap[segmentFileName] = lastMessageID
-		}
+	if err := f.openEventLog(); err != nil {
+		return err
 	}
 
-	retryLogPath = filepath.Join(dirs, "retry.state")
-	retryMap = make(map[string]map[int64]int)
-	if _, err := os.Stat(retryLogPath); os.IsNotExist(err) {
-		// create retry log file if it does not exist
-		retryFile, err = os.Create(retryLogPath)
-		if err != nil {
-			segmentFile.Close()     // Close segment file if retry file creation fails
-			offsetFile.Close()      // Close offset file if retry file creation fails
-			segmentMetadata.Close() // Close segment metadata file if retry file creation fails
-			return fmt.Errorf("error creating retry log file: %v", err)
-		}
-	} else {
-		// If the retry log file exists, we can read it to restore the retry map
-		retryFile, err = os.Open(retryLogPath)
-		if err != nil {
-			segmentFile.Close()     // Close segment file if retry file opening fails
-			offsetFile.Close()      // Close offset file if retry file opening fails
-			segmentMetadata.Close() // Close segment metadata file if retry file opening fails
-			return fmt.Errorf("error opening retry log file: %v", err)
-		}
-		var consumerID string
-		var messageID int64
-		var retryCount int
-		for {
-			_, err := fmt.Fscanf(retryFile, "%s %d %d\n", &consumerID, &messageID, &retryCount)
-			if err != nil {
-				if err == io.EOF {
-					break // End of file reached
-				}
-				return fmt.Errorf("error reading retry log file: %v", err)
-			}
-			if _, ok := retryMap[consumerID]; !ok {
-				retryMap[consumerID] = make(map[int64]int) // Initialize retry map
-			}
-			retryMap[consumerID][messageID] = retryCount // Restore retry count
+	return nil
+}
+
+func (f *fileManager) CloseFiles() error {
+	f.mutex.Lock()
+	defer f.mutex.Unlock()
+
+	f.saveEventToMetadata()
+
+	if f.eventLogFile != nil {
+		if err := f.eventLogFile.Close(); err != nil {
+			return fmt.Errorf("error closing event log file: %v", err)
 		}
 	}
 
 	return nil
 }
 
-func CloseFiles() error {
-	mutex.Lock()
-	defer mutex.Unlock()
-
-	var errMsg string
-
-	if segmentFile != nil {
-		if err := segmentFile.Close(); err != nil {
-			if errMsg != "" {
-				errMsg += "; "
-			}
-			errMsg += fmt.Sprintf("segment file: %v", err)
-		}
-		segmentFile = nil
-	}
-
-	if offsetFile != nil {
-		if err := offsetFile.Close(); err != nil {
-			if errMsg != "" {
-				errMsg += "; "
-			}
-			errMsg += fmt.Sprintf("offset file: %v", err)
-		}
-		offsetFile = nil
-	}
-
-	if segmentMetadata != nil {
-		if err := segmentMetadata.Close(); err != nil {
-			if errMsg != "" {
-				errMsg += "; "
-			}
-			errMsg += fmt.Sprintf("segment metadata file: %v", err)
-		}
-		segmentMetadata = nil
-	}
-
-	if retryFile != nil {
-		if err := retryFile.Close(); err != nil {
-			errMsg += fmt.Sprintf("retry file: %v", err)
-		}
-		retryFile = nil
-	}
-
-	if dlqFile != nil {
-		if err := dlqFile.Close(); err != nil {
-			errMsg += fmt.Sprintf("dead-letter queue file: %v", err)
-		}
-		dlqFile = nil
-	}
-
-	if errMsg != "" {
-		return fmt.Errorf("close errors: %s", errMsg)
-	}
-	return nil
-}
-
-func WriteMsgToSegment(msg internal.Msg) error {
-	mutex.Lock()
-	defer mutex.Unlock()
-	// Implement logic to write a message to a specific segment file
-	if segmentFile == nil {
-		return fmt.Errorf("segment file is not open")
-	}
-	data, err := json.Marshal(msg)
+func (f *fileManager) openFileAndParse(filePath string, parseFunc func(*os.File) error) error {
+	file, err := os.OpenFile(filePath, os.O_RDONLY|os.O_CREATE, 0644)
 	if err != nil {
-		return fmt.Errorf("error marshaling message to JSON: %v", err)
+		return fmt.Errorf("error opening file %s: %v", filePath, err)
 	}
-	if _, err := segmentFile.Write(append(data, '\n')); err != nil {
-		return fmt.Errorf("error writing message to segment file: %v", err)
+	defer file.Close()
+
+	if err := parseFunc(file); err != nil {
+		return fmt.Errorf("error parsing file %s: %v", filePath, err)
 	}
 
-	// if segment file split(max-size or max-age), update segment file metadata
-	if segmentFile != nil {
-		stat, err := segmentFile.Stat()
-		if err != nil {
-			return fmt.Errorf("error getting segment file stats: %v", err)
+	return nil
+}
+
+func (f *fileManager) openSnapshotFile() error {
+	f.snapshotLSN = filepath.Join(f.dirs, "snapshot.lsn")
+
+	parseFunc := func(file *os.File) error {
+		scanner := bufio.NewScanner(file)
+		for scanner.Scan() {
+			var lsn int64
+			if _, err := fmt.Sscanf(scanner.Text(), "%d", &lsn); err != nil {
+				return fmt.Errorf("error parsing snapshot LSN file: %v", err)
+			}
+			f.appliedLSN = lsn // Update the last applied LSN
+			f.LSN = lsn        // Update the last sequence number
 		}
-		// fmt.Println(stat.Size(), maxSize, stat.ModTime(), maxAge)
-		if stat.Size() > (int64(maxSize*1024*1024)) || stat.ModTime().AddDate(0, 0, maxAge).Before(time.Now()) {
-			// Split the segment file based on size or age
-			oldSegmentFilePath, err := splitSegmentFile()
+		if err := scanner.Err(); err != nil {
+			return fmt.Errorf("error reading snapshot LSN file: %v", err)
+		}
+		return nil
+	}
+	f.openFileAndParse(f.snapshotLSN, parseFunc)
+	return nil
+}
+
+func (f *fileManager) openOffsetFile() error {
+	f.offsetState = filepath.Join(f.dirs, "offset.state")
+
+	parseFunc := func(file *os.File) error {
+		scanner := bufio.NewScanner(file)
+		for scanner.Scan() {
+			var consumerID string
+			var offset int64
+			if _, err := fmt.Sscanf(scanner.Text(), "%s %d", &consumerID, &offset); err != nil {
+				return fmt.Errorf("error parsing offset state file: %v", err)
+			}
+			f.offsetMap[consumerID] = offset // Update the offset for the consumer
+
+		}
+		if err := scanner.Err(); err != nil {
+			return fmt.Errorf("error reading offset state file: %v", err)
+		}
+		return nil
+	}
+	f.openFileAndParse(f.offsetState, parseFunc)
+	return nil
+}
+
+func (f *fileManager) openRetryFile() error {
+	f.retryState = filepath.Join(f.dirs, "retry.state")
+
+	parseFunc := func(file *os.File) error {
+		scanner := bufio.NewScanner(file)
+		for scanner.Scan() {
+			var consumerID string
+			var messageID int64
+			var messageIDStr string
+			var retryCount int
+			if _, err := fmt.Sscanf(scanner.Text(), "%s %s %d", &consumerID, &messageIDStr, &retryCount); err != nil {
+				return fmt.Errorf("error parsing retry state file: %v", err)
+			}
+			messageID, err := strconv.ParseInt(messageIDStr, 10, 64)
 			if err != nil {
-				return fmt.Errorf("error splitting segment file: %v", err)
+				return fmt.Errorf("error converting messageID to int64: %v", err)
 			}
-			// Update segment file metadata
-			if err := updateSegmentFileMetadata(oldSegmentFilePath, msg.Id); err != nil {
-				return fmt.Errorf("error updating segment file metadata: %v", err)
+			if _, ok := f.retryMap[consumerID]; !ok {
+				f.retryMap[consumerID] = make(map[int64]int)
 			}
+			f.retryMap[consumerID][messageID] = retryCount // Update the retry count for the message
 		}
+		if err := scanner.Err(); err != nil {
+			return fmt.Errorf("error reading retry state file: %v", err)
+		}
+		return nil
+	}
+	f.openFileAndParse(f.retryState, parseFunc)
 
+	return nil
+}
+
+func (f *fileManager) openSegmentFileMetadata() error {
+	f.segmentFileMetadataState = filepath.Join(f.dirs, "segment_file_metadata.state")
+
+	parseFunc := func(file *os.File) error {
+		scanner := bufio.NewScanner(file)
+		for scanner.Scan() {
+			var order int
+			var segmentName string
+			var endLSN int64
+			if _, err := fmt.Sscanf(scanner.Text(), "%d %s %d", &order, &segmentName, &endLSN); err != nil {
+				return fmt.Errorf("error parsing segment file metadata state file: %v", err)
+			}
+			f.segmentFileMetadataMap[segmentName] = endLSN
+		}
+		return nil
+	}
+	if err := f.openFileAndParse(f.segmentFileMetadataState, parseFunc); err != nil {
+		return fmt.Errorf("error opening segment file metadata state file: %v", err)
 	}
 
-	// Update the latest message ID
-	if msg.Id > latestMessageID {
-		latestMessageID = msg.Id
+	for segmentName, lsn := range f.segmentFileMetadataMap {
+		if lsn > f.appliedLSN {
+			// file loading & add msg to queue
+			segmentFilePath := filepath.Join(f.dirs, segmentName)
+			parseFunc := func(file *os.File) error {
+				scanner := bufio.NewScanner(file)
+				for scanner.Scan() {
+					var msg internal.Msg
+					if err := json.Unmarshal([]byte(scanner.Text()), &msg); err != nil {
+						return fmt.Errorf("error unmarshalling message from segment file %s: %v", segmentFilePath, err)
+					}
+					f.queue = append(f.queue, msg)          // Add message to the queue
+					f.msgIdToIdx[msg.Id] = len(f.queue) - 1 // Update message ID to index map
+				}
+				return nil
+			}
+			if err := f.openFileAndParse(segmentFilePath, parseFunc); err != nil {
+				return fmt.Errorf("error parsing segment file %s: %v", segmentFilePath, err)
+			}
+		}
 	}
 
 	return nil
 }
 
-func writeMsgToDLQ(msg internal.Msg) error {
-
-	if dlqFile == nil {
-		var err error
-		dlqLogPath = filepath.Join(dirs, "dead_letter_queue.log")
-		dlqFile, err = os.OpenFile(dlqLogPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-		if err != nil {
-			return fmt.Errorf("error opening dead-letter queue file: %v", err)
+func (f *fileManager) openDeadLetterQueueLog() error {
+	f.deadLetterQueueLog = filepath.Join(f.dirs, "dead_letter_queue.log")
+	parseFunc := func(file *os.File) error {
+		scanner := bufio.NewScanner(file)
+		for scanner.Scan() {
+			var msg internal.Msg
+			if err := json.Unmarshal([]byte(scanner.Text()), &msg); err != nil {
+				return fmt.Errorf("error unmarshalling message from dead-letter queue log file: %v", err)
+			}
+			f.deadLetterQueue = append(f.deadLetterQueue, msg) // Add message to the dead-letter queue
 		}
+		return nil
 	}
+	if err := f.openFileAndParse(f.deadLetterQueueLog, parseFunc); err != nil {
+		return fmt.Errorf("error parsing dead-letter queue log file: %v", err)
+	}
+	return nil
+}
 
-	data, err := json.Marshal(msg)
+func (f *fileManager) replayEventLog() error {
+	p := filepath.Join(f.dirs, "event.log")
+	parseFunc := func(file *os.File) error {
+		dec := json.NewDecoder(file)
+		for {
+			var ev event
+			if err := dec.Decode(&ev); err != nil {
+				if errors.Is(err, io.EOF) {
+					break
+				}
+				return fmt.Errorf("decode event.log: %w", err)
+			}
+			if ev.Lsn <= f.appliedLSN {
+				continue
+			} // Skip events that are already applied
+			f.applyEvent(ev) // Apply the event to the queue
+			if ev.Lsn > f.LSN {
+				f.LSN = ev.Lsn // Update the last sequence number
+			}
+		}
+		return nil
+	}
+	if err := f.openFileAndParse(p, parseFunc); err != nil {
+		return fmt.Errorf("error parsing event log file: %v", err)
+	}
+	return nil
+}
+
+func (f *fileManager) applyEvent(ev event) {
+	switch ev.Type {
+	case "ENQUEUE":
+		msg, ok := ev.Data.(internal.Msg)
+		if !ok {
+			fmt.Printf("Error asserting message type: %v\n", ev.Data)
+			return
+		}
+		f.queue = append(f.queue, msg)          // Add message to the queue
+		f.msgIdToIdx[msg.Id] = len(f.queue) - 1 // Update message ID to index map
+
+	case "ACK":
+		data := ev.Data.(map[string]interface{})
+		consumerID := data["consumerID"].(string)
+		messageID := int64(data["messageID"].(int64))
+		f.offsetMap[consumerID] = messageID // Update offset for the consumer
+
+	case "NACK":
+		data := ev.Data.(map[string]interface{})
+		consumerID := data["consumerID"].(string)
+		messageID := int64(data["messageID"].(int64))
+		retryCount := int(data["retryCount"].(int64))
+		if _, ok := f.retryMap[consumerID]; !ok {
+			f.retryMap[consumerID] = make(map[int64]int)
+		}
+		f.retryMap[consumerID][messageID] = retryCount // Update retry count for the message
+
+	case "DLQ":
+		msg, ok := ev.Data.(internal.Msg)
+		if !ok {
+			fmt.Printf("Error asserting dead-letter queue message type: %v\n", ev.Data)
+			return
+		}
+		f.deadLetterQueue = append(f.deadLetterQueue, msg) // Add message to the dead-letter queue
+	default:
+		fmt.Printf("Unknown event type: %s\n", ev.Type)
+	}
+}
+
+func (f *fileManager) openEventLog() error {
+	p := filepath.Join(f.dirs, "event.log")
+	f.eventLog = p
+	af, err := os.OpenFile(p, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644)
 	if err != nil {
-		return fmt.Errorf("error marshaling message to JSON for DLQ: %v", err)
+		return err
 	}
-	if _, err := dlqFile.Write(append(data, '\n')); err != nil {
-		return fmt.Errorf("error writing message to dead-letter queue file: %v", err)
+	f.eventLogFile = af
+	return nil
+}
+
+func (f *fileManager) WriteMsg(msg internal.Msg) error {
+	f.mutex.Lock()
+	defer f.mutex.Unlock()
+
+	// Increment the last sequence number
+	f.LSN++
+
+	// Write the event to the event log file
+	event := event{
+		Lsn:  f.LSN,
+		Ts:   time.Now().UnixNano(),
+		Type: "ENQUEUE",
+		Data: msg,
+	}
+	if err := f.writeEventToLog(event); err != nil {
+		return fmt.Errorf("error writing event to log: %v", err)
+	}
+	f.msgIdToIdx[msg.Id] = len(f.queue) // Map message ID to index in the queue
+	f.queue = append(f.queue, msg)      // Add the message to the queue
+	return nil
+}
+
+func (f *fileManager) WriteOffset(consumerID string, messageID int64) error {
+	f.mutex.Lock()
+	defer f.mutex.Unlock()
+
+	if consumerID == "" {
+		return fmt.Errorf("consumer ID is empty")
+	}
+	if messageID == 0 {
+		return fmt.Errorf("message ID is zero")
+	}
+
+	f.LSN++
+	event := event{
+		Lsn:  f.LSN,
+		Ts:   time.Now().UnixNano(),
+		Type: "ACK",
+		Data: map[string]interface{}{
+			"consumerID": consumerID,
+			"messageID":  messageID,
+		},
+	}
+	if err := f.writeEventToLog(event); err != nil {
+		return fmt.Errorf("error writing event to log: %v", err)
+	}
+
+	if f.offsetMap[consumerID] < messageID { // Update the offset for the consumer
+		f.offsetMap[consumerID] = messageID
+	}
+	if f.retryMap[consumerID] != nil {
+		delete(f.retryMap[consumerID], messageID) // Remove from retry map
+	}
+	return nil
+}
+
+func (f *fileManager) WriteRetry(consumerID string, messageID int64, MaxRetry int) error {
+	f.mutex.Lock()
+	defer f.mutex.Unlock()
+
+	if consumerID == "" {
+		return fmt.Errorf("consumer ID is empty")
+	}
+	if messageID == 0 {
+		return fmt.Errorf("message ID is zero")
+	}
+
+	if _, ok := f.retryMap[consumerID]; !ok {
+		f.retryMap[consumerID] = make(map[int64]int)
+	}
+	retryCount := f.retryMap[consumerID][messageID] + 1 // Increment retry count
+	f.LSN++
+	var ev = event{
+		Lsn:  f.LSN,
+		Ts:   time.Now().UnixNano(),
+		Type: "NACK",
+		Data: map[string]interface{}{
+			"consumerID": consumerID,
+			"messageID":  fmt.Sprintf("%d", messageID), // message ID (int64) -> string
+			"retryCount": retryCount,
+		},
+	}
+	if err := f.writeEventToLog(ev); err != nil {
+		return fmt.Errorf("error writing event to log: %v", err)
+	}
+	f.retryMap[consumerID][messageID] = retryCount // Update the retry count
+
+	if retryCount >= MaxRetry {
+		var msg internal.Msg = f.queue[f.msgIdToIdx[messageID]] // Get the message from the queue
+		f.LSN++
+		var ev = event{
+			Lsn:  f.LSN,
+			Ts:   time.Now().UnixNano(),
+			Type: "DLQ",
+			Data: msg,
+		}
+		if err := f.writeEventToLog(ev); err != nil {
+			return fmt.Errorf("error writing event to log: %v", err)
+		}
+		f.offsetMap[consumerID] = messageID       // Update offset for the consumer
+		delete(f.retryMap[consumerID], messageID) // Remove from retry map
+		if len(f.retryMap[consumerID]) == 0 {
+			delete(f.retryMap, consumerID) // Clean up empty retry map
+		}
+		f.deadLetterQueue = append(f.deadLetterQueue, msg) // Add message to the dead-letter queue
 	}
 
 	return nil
 }
 
-func ReadMsgForConsumer(consumerID string, maxCount int) ([]internal.Msg, error) {
-	mutex.Lock()
-	defer mutex.Unlock()
-
-	if offsetMap == nil {
-		return nil, fmt.Errorf("offset map is not initialized")
+func (f *fileManager) writeEventToLog(event event) error {
+	data, err := json.Marshal(event)
+	if err != nil {
+		return fmt.Errorf("error marshalling event: %v", err)
 	}
+	if _, err := f.eventLogFile.Write(append(data, '\n')); err != nil {
+		return fmt.Errorf("error writing to event log file: %v", err)
+	}
+
+	return f.eventLogFile.Sync()
+}
+
+func (f *fileManager) ReadMsg(consumerID string, maxCount int) ([]internal.Msg, error) {
+	f.mutex.Lock()
+	defer f.mutex.Unlock()
+
 	if consumerID == "" {
 		return nil, fmt.Errorf("consumer ID is empty")
 	}
 	if maxCount <= 0 {
 		return nil, fmt.Errorf("max count must be greater than 0")
 	}
-	if offsetFile == nil {
-		return nil, fmt.Errorf("offset file is not open")
-	}
-	// Read the offset for the consumer
-	lastOffset, exists := offsetMap[consumerID]
-	if !exists {
-		offsetMap[consumerID] = int64(0) // Initialize offset if it does not exist
-	}
-	// Read messages from the segment file starting from the last offset
-	allMessages := []internal.Msg{}
-	fileNames := make([]string, 0, len(segmentFileMetadataMap))
-	for fileName := range segmentFileMetadataMap {
-		fileNames = append(fileNames, fileName)
-	}
-	if _, err := os.Stat(filepath.Join(dirs, "segments.log")); err == nil {
-		fileNames = append(fileNames, "segments.log") // Include the current segment file
-	}
 
-	sort.Strings(fileNames)
-	for _, fileName := range fileNames {
-		filePath := filepath.Join(dirs, fileName)
-		messages, err := readMsgFromSegmentFile(filePath, lastOffset, maxCount)
-		if err != nil {
-			return nil, fmt.Errorf("error reading messages from segment file %s: %v", filePath, err)
-		}
-		allMessages = append(allMessages, messages...)
-		if len(allMessages) >= maxCount {
-			break // Stop reading if we have enough messages
-		}
-	}
-
-	// if len(allMessages) == 0 {
-	// 	return nil, fmt.Errorf("no messages available for consumer %s", consumerID)
-	// }
-	return allMessages, nil
-}
-
-func readMsgFromSegmentFile(filepath string, lastOffset int64, maxCount int) ([]internal.Msg, error) {
-	f, err := os.Open(filepath)
-	if err != nil {
-		return nil, fmt.Errorf("error opening segment file %s: %v", filepath, err)
-	}
-	defer f.Close()
 	var messages []internal.Msg
-	var msg internal.Msg
-	count := int(0)
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		if err := json.Unmarshal(scanner.Bytes(), &msg); err != nil {
-			fmt.Printf("invalid JSON line: %s", scanner.Text())
-			continue
-		}
-		// Check if the message ID is greater than the last offset
-		if msg.Id > lastOffset {
+	for _, msg := range f.queue {
+		if msg.Id > f.offsetMap[consumerID] && len(messages) < maxCount {
 			messages = append(messages, msg)
-			count++
-			if count >= maxCount {
-				break
-			}
 		}
 	}
+	if len(messages) == 0 {
+		return nil, fmt.Errorf("no new messages for consumer %s", consumerID)
+	}
+
 	return messages, nil
 }
 
-func getMsgFromSegmentFile(filePath string, messageID int64) (internal.Msg, error) {
-	f, err := os.Open(filePath)
+// 유틸
+func remarshal(src any, dst any) error {
+	b, err := json.Marshal(src)
 	if err != nil {
-		return internal.Msg{}, fmt.Errorf("error opening segment file %s: %v", filePath, err)
+		return err
 	}
-	defer f.Close()
-	var msg internal.Msg
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		if err := json.Unmarshal(scanner.Bytes(), &msg); err != nil {
-			fmt.Printf("invalid JSON line: %s", scanner.Text())
-			continue
-		}
-		if msg.Id == messageID {
-			return msg, nil // Return the message if found
-		}
-	}
-	return internal.Msg{}, fmt.Errorf("message with ID %d not found in segment file %s", messageID, filePath)
+	return json.Unmarshal(b, dst)
 }
-
-func WriteOffset(consumer_id string, messageID int64) error {
-	mutex.Lock()
-	defer mutex.Unlock()
-	offsetMap[consumer_id] = messageID
-
-	if err := writeOffsetToFile(); err != nil {
-		return fmt.Errorf("error writing offset to file: %v", err)
-	}
-
-	return nil
-}
-
-func writeOffsetToFile() error {
-	// 1. 임시 파일 생성
-	tempFile, err := os.CreateTemp(filepath.Dir(offsetLogPath), "offset.temp")
+func fsyncDir(dir string) error {
+	d, err := os.Open(dir)
 	if err != nil {
-		return fmt.Errorf("error creating temporary offset file: %v", err)
+		return err
 	}
-
-	// 2. 임시 파일에 새로운 오프셋 맵 쓰기
-	for consumerID, offset := range offsetMap {
-		if _, err := tempFile.WriteString(fmt.Sprintf("%s %d\n", consumerID, offset)); err != nil {
-			tempFile.Close()
-			os.Remove(tempFile.Name()) // 에러 발생 시 임시 파일 삭제
-			return fmt.Errorf("error writing offset to temporary file: %v", err)
-		}
+	defer d.Close()
+	return d.Sync()
+}
+func atomicWrite(path string, write func(*os.File) error) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".tmp-*")
+	if err != nil {
+		return err
 	}
-
-	// 3. 쓰기 완료 후 임시 파일을 닫아야 Rename 가능
-	if err := tempFile.Close(); err != nil {
-		os.Remove(tempFile.Name())
-		return fmt.Errorf("error closing temporary offset file: %v", err)
+	name := tmp.Name()
+	if err := write(tmp); err != nil {
+		tmp.Close()
+		os.Remove(name)
+		return err
 	}
-
-	// 4. 원자적으로 임시 파일을 원본 파일로 변경 (덮어쓰기)
-	if err := os.Rename(tempFile.Name(), offsetLogPath); err != nil {
-		os.Remove(tempFile.Name())
-		return fmt.Errorf("error renaming temporary offset file: %v", err)
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		os.Remove(name)
+		return err
 	}
-
-	return nil
+	if err := tmp.Close(); err != nil {
+		os.Remove(name)
+		return err
+	}
+	if err := os.Rename(name, path); err != nil {
+		os.Remove(name)
+		return err
+	}
+	return fsyncDir(dir)
 }
 
-func WriteRetry(consumerID string, messageID int64, maxRetry int) error {
-	mutex.Lock()
-	defer mutex.Unlock()
+func (f *fileManager) saveEventToMetadata() error {
+	// 0) 스냅샷 경계 고정
+	S := f.LSN
 
-	if retryMap == nil {
-		retryMap = make(map[string]map[int64]int)
+	// 1) event.log 새 이벤트 스캔(읽기 핸들 별도)
+	rf, err := os.OpenFile(f.eventLog, os.O_RDONLY|os.O_CREATE, 0644)
+	if err != nil {
+		return fmt.Errorf("open event.log: %w", err)
 	}
+	defer rf.Close()
 
-	if _, exists := retryMap[consumerID]; !exists {
-		retryMap[consumerID] = make(map[int64]int) // Initialize retry map for the consumer
+	// 임시 상태 = "현재 메모리 상태"에서 시작해 증분 적용
+	tempOffset := make(map[string]int64, len(f.offsetMap))
+	for k, v := range f.offsetMap {
+		tempOffset[k] = v
 	}
-
-	if _, exists := retryMap[consumerID][messageID]; !exists {
-		retryMap[consumerID][messageID] = 0 // Initialize retry count
-	}
-
-	retryMap[consumerID][messageID]++ // Increment retry count
-
-	if retryMap[consumerID][messageID] > maxRetry {
-		// If max retries exceeded, move to dead-letter queue
-		msg := internal.Msg{Id: messageID, Item: nil} // find a message for dead-letter queue
-		fileNames := make([]string, 0, len(segmentFileMetadataMap))
-		for fileName := range segmentFileMetadataMap {
-			fileNames = append(fileNames, fileName)
+	tempRetry := make(map[string]map[int64]int, len(f.retryMap))
+	for c, m := range f.retryMap {
+		mm := make(map[int64]int, len(m))
+		for id, rc := range m {
+			mm[id] = rc
 		}
-		if _, err := os.Stat(filepath.Join(dirs, "segments.log")); err == nil {
-			fileNames = append(fileNames, "segments.log") // Include the current segment file
-		}
+		tempRetry[c] = mm
+	}
+	tempDLQ := make(map[int64]internal.Msg, len(f.deadLetterQueue))
+	for _, msg := range f.deadLetterQueue {
+		tempDLQ[msg.Id] = msg
+	}
 
-		sort.Strings(fileNames)
-		var found bool
-		for _, fileName := range fileNames {
-			filePath := filepath.Join(dirs, fileName)
-			var err error
-			msg, err = getMsgFromSegmentFile(filePath, messageID)
-			if err == nil {
-				found = true
+	// 이번 스냅샷에서 새로 추가될 ENQUEUE만 수집(이전 스냅샷 분은 기존 segment 스냅샷 파일에 이미 있음)
+	newEnq := make([]internal.Msg, 0, 1024)
+
+	dec := json.NewDecoder(rf)
+	for {
+		var ev event
+		if err := dec.Decode(&ev); err != nil {
+			if errors.Is(err, io.EOF) {
 				break
 			}
+			return fmt.Errorf("decode event.log: %w", err)
 		}
-		if !found {
-			return fmt.Errorf("message with ID %d not found in any segment file", messageID)
+		if ev.Lsn <= f.appliedLSN { // 이전 스냅샷 포함분은 건너뛰
+			continue
 		}
-
-		if err := writeMsgToDLQ(msg); err != nil {
-			return fmt.Errorf("error writing message to dead-letter queue: %v", err)
-		}
-		offsetMap[consumerID] = messageID
-		if err := writeOffsetToFile(); err != nil {
-			return fmt.Errorf("error writing offset to file after moving to DLQ: %v", err)
-		}
-		delete(retryMap[consumerID], messageID) // Remove from retry map
-		if len(retryMap[consumerID]) == 0 {
-			delete(retryMap, consumerID) // Clean up empty retry map
-		}
-	}
-
-	// temp file creation
-	tempFile, err := os.CreateTemp(filepath.Dir(retryLogPath), "retry.temp")
-	if err != nil {
-		return fmt.Errorf("error creating temporary retry file: %v", err)
-	}
-	// Write the retry map to the temporary file
-	for consumerID, messages := range retryMap {
-		for messageID, retryCount := range messages {
-			if _, err := tempFile.WriteString(fmt.Sprintf("%s %d %d\n", consumerID, messageID, retryCount)); err != nil {
-				tempFile.Close()
-				os.Remove(tempFile.Name()) // Remove temp file on error
-				return fmt.Errorf("error writing retry to temporary file: %v", err)
+		switch ev.Type {
+		case "ENQUEUE":
+			var m internal.Msg
+			if err := remarshal(ev.Data, &m); err != nil {
+				return fmt.Errorf("ev ENQUEUE data: %w", err)
+			}
+			newEnq = append(newEnq, m)
+		case "ACK":
+			var p struct {
+				ConsumerID string `json:"consumerID"`
+				MessageID  int64  `json:"messageID"`
+			}
+			if err := remarshal(ev.Data, &p); err != nil {
+				return fmt.Errorf("ev ACK data: %w", err)
+			}
+			if tempOffset[p.ConsumerID] < p.MessageID {
+				tempOffset[p.ConsumerID] = p.MessageID
+			}
+		case "NACK": // 현재 설계 유지 시
+			var p struct {
+				ConsumerID string
+				MessageID  int64
+				RetryCount int
+			}
+			if err := remarshal(ev.Data, &p); err != nil {
+				return fmt.Errorf("ev NACK data: %w", err)
+			}
+			mm := tempRetry[p.ConsumerID]
+			if mm == nil {
+				mm = map[int64]int{}
+				tempRetry[p.ConsumerID] = mm
+			}
+			mm[p.MessageID] = p.RetryCount
+		case "DLQ":
+			var m internal.Msg
+			if err := remarshal(ev.Data, &m); err != nil {
+				return fmt.Errorf("ev DLQ data: %w", err)
+			}
+			// DLQ 메시지 추가
+			if _, exists := tempDLQ[m.Id]; !exists {
+				tempDLQ[m.Id] = m // Add to DLQ if not already present
 			}
 		}
 	}
-	// Close the temporary file
-	if err := tempFile.Close(); err != nil {
-		os.Remove(tempFile.Name()) // Remove temp file on error
-		return fmt.Errorf("error closing temporary retry file: %v", err)
-	}
-	// Rename the temporary file to the original retry log path
-	if err := os.Rename(tempFile.Name(), retryLogPath); err != nil {
-		os.Remove(tempFile.Name()) // Remove temp file on error
-		return fmt.Errorf("error renaming temporary retry file: %v", err)
-	}
 
-	return nil
-}
-
-func splitSegmentFile() (string, error) {
-	// Split the segment file based on size
-	if segmentFile == nil {
-		return "", fmt.Errorf("segment file is not open")
-	}
-	segmentFile.Close()
-
-	oldSegmentFilePath := filepath.Join(filepath.Dir(dirs), fmt.Sprintf("segment_%d.log", time.Now().UnixNano()))
-	if err := os.Rename(segmentPath, oldSegmentFilePath); err != nil {
-		return "", fmt.Errorf("error renaming segment file: %v", err)
-	}
-	// Create a new segment file
-	var err error
-	segmentFile, err = os.Create(segmentPath)
-	if err != nil {
-		// If we fail to create a new segment file, we should restore the old one
-		if err := os.Rename(oldSegmentFilePath, segmentPath); err != nil {
-			return "", fmt.Errorf("error restoring old segment file: %v", err)
+	// 2) 최종 cut_id 계산
+	cutID := int64(0)
+	first := true
+	for _, off := range tempOffset {
+		if first || off < cutID {
+			cutID = off
+			first = false
 		}
-		return "", fmt.Errorf("error creating new segment file: %v", err)
 	}
-	return oldSegmentFilePath, nil
-}
 
-func deleteSegmentFile(minMessageID int64) error {
-	// Implement logic to delete a specific segment file
-	for segmentFileName, lastMessageID := range segmentFileMetadataMap {
-		if lastMessageID < minMessageID {
-			// Delete the segment file
-			err := os.Remove(segmentFileName)
-			if err != nil {
-				return fmt.Errorf("error deleting segment file %s: %v", segmentFileName, err)
+	// cutId 이전 message를 queue에서 제거 & msgIdToIdx 갱신
+	var start_index = 0
+	for i := 0; i < len(f.queue); i++ {
+		if f.queue[i].Id <= cutID {
+			continue
+		}
+		// cutID 이후 메시지만 남김
+		f.queue = f.queue[i:]
+		start_index = i
+		break
+	}
+	// msgIdToIdx 갱신
+	for id, index := range f.msgIdToIdx {
+		if index <= start_index {
+			delete(f.msgIdToIdx, id) // cutID 이전 메시지는 제거
+		} else if index >= len(f.queue) {
+			// 인덱스가 범위를 벗어난 경우, 새 인덱스로 갱신
+			f.msgIdToIdx[id] = index - start_index
+		}
+	}
+
+	// 3) segment 스냅샷 파일 작성: (cutID < id ≤ S) && !DLQ 에 해당하는 **이번 증분 ENQUEUE만**
+	// (과거 분은 기존 segment 스냅샷 파일들에 이미 있음)
+	// 필요시 크기 기준 분할 구현. 여기선 단일 파일 예시.
+	messageToWrite := []internal.Msg{}
+	for _, m := range newEnq {
+		if m.Id <= cutID {
+			continue
+		}
+		if _, dead := tempDLQ[m.Id]; dead {
+			continue
+		}
+		messageToWrite = append(messageToWrite, m)
+
+	}
+	if len(messageToWrite) > 0 {
+		segName := fmt.Sprintf("segment_%d.snap", S)
+		f.segmentFileMetadataMap[segName] = S
+		if err := atomicWrite(filepath.Join(f.dirs, segName), func(f *os.File) error {
+			w := bufio.NewWriter(f)
+			for _, m := range messageToWrite {
+				b, _ := json.Marshal(m)
+				if _, err := w.Write(append(b, '\n')); err != nil {
+					return err
+				}
 			}
-			// Remove the metadata entry
-			delete(segmentFileMetadataMap, segmentFileName)
+			return w.Flush()
+		}); err != nil {
+			return fmt.Errorf("write segment: %w", err)
 		}
 	}
 
+	// 4) segment 메타 갱신(전체 목록 재기록 권장)
+	// 기존 맵에 새 파일 등록
+	// 정렬 출력 + 헤더
+	if err := atomicWrite(f.segmentFileMetadataState, func(file *os.File) error {
+		keys := make([]string, 0, len(f.segmentFileMetadataMap))
+		for k := range f.segmentFileMetadataMap {
+			keys = append(keys, k)
+		}
+		// sort keys by value (end LSN)
+		sort.Slice(keys, func(i, j int) bool {
+			return f.segmentFileMetadataMap[keys[i]] < f.segmentFileMetadataMap[keys[j]]
+		})
+		bw := bufio.NewWriter(file)
+		for i, k := range keys {
+			if _, err := fmt.Fprintf(bw, "%d %s %d\n", i+1, k, f.segmentFileMetadataMap[k]); err != nil {
+				return err
+			}
+		}
+		return bw.Flush()
+	}); err != nil {
+		return fmt.Errorf("write segment meta: %w", err)
+	}
+
+	// 5) 오프셋/리트라이/DLQ 전체 스냅샷 재기록
+	if err := atomicWrite(f.offsetState, func(file *os.File) error {
+		bw := bufio.NewWriter(file)
+		// consumerID 정렬
+		ids := make([]string, 0, len(tempOffset))
+		for id := range tempOffset {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids)
+		for _, id := range ids {
+			if _, err := fmt.Fprintf(bw, "%s %d\n", id, tempOffset[id]); err != nil {
+				return err
+			}
+		}
+		return bw.Flush()
+	}); err != nil {
+		return fmt.Errorf("write offset: %w", err)
+	}
+
+	if err := atomicWrite(f.retryState, func(file *os.File) error {
+		bw := bufio.NewWriter(file)
+		ids := make([]string, 0, len(tempRetry))
+		for id := range tempRetry {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids)
+		for _, id := range ids {
+			// messageID 정렬
+			mids := make([]int64, 0, len(tempRetry[id]))
+			for mid := range tempRetry[id] {
+				mids = append(mids, mid)
+			}
+			sort.Slice(mids, func(i, j int) bool { return mids[i] < mids[j] })
+			for _, mid := range mids {
+				if _, err := fmt.Fprintf(bw, "%s %d %d\n", id, mid, tempRetry[id][mid]); err != nil {
+					return err
+				}
+			}
+		}
+		return bw.Flush()
+	}); err != nil {
+		return fmt.Errorf("write retry: %w", err)
+	}
+
+	if err := atomicWrite(f.deadLetterQueueLog, func(file *os.File) error {
+		bw := bufio.NewWriter(file)
+		// DLQ id 정렬(선택)
+		ids := make([]int64, 0, len(tempDLQ))
+		for id := range tempDLQ {
+			ids = append(ids, id)
+		}
+		sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+		for _, id := range ids {
+			// DLQ 메시지 본문 저장
+			m := tempDLQ[id]
+			b, _ := json.Marshal(m)
+			if _, err := bw.Write(append(b, '\n')); err != nil {
+				return err
+			}
+		}
+		return bw.Flush()
+	}); err != nil {
+		return fmt.Errorf("write dlq: %w", err)
+	}
+
+	// 6) snapshot.lsn 커밋 (원자 포인터)
+	if err := atomicWrite(f.snapshotLSN, func(file *os.File) error {
+		_, err := fmt.Fprintf(file, "%d\n", S)
+		return err
+	}); err != nil {
+		return fmt.Errorf("write snapshot.lsn: %w", err)
+	}
+
+	// 7) WAL truncate/rotate (별도 함수로 실행)
+	if err := f.truncateEventLog(S); err != nil {
+		return fmt.Errorf("truncate wal: %w", err)
+	}
+	fmt.Println("segment file metadata map:", f.segmentFileMetadataMap)
+	// 8) 메모리 경계 업데이트
+	f.appliedLSN = S
 	return nil
 }
 
-// segment file이 split 되었을 때, segment file metadata를 기록하는 함수
-func updateSegmentFileMetadata(segmentFileName string, lastMessageID int64) error {
-	if segmentFileMetadataMap == nil {
-		segmentFileMetadataMap = make(map[string]int64)
+func (f *fileManager) truncateEventLog(S int64) error {
+	// append 핸들 닫기
+	if f.eventLogFile != nil {
+		if err := f.eventLogFile.Sync(); err != nil {
+			return err
+		}
+		if err := f.eventLogFile.Close(); err != nil {
+			return err
+		}
+		f.eventLogFile = nil
 	}
-	segmentFileMetadataMap[segmentFileName] = lastMessageID
-	// segmentFileMetadata to file save
-	if err := writeSegmentFileMetadata(); err != nil {
-		return fmt.Errorf("error writing segment file metadata: %v", err)
+	// tail만 새 파일로 복사
+	oldPath := f.eventLog
+	newPath := filepath.Join(f.dirs, "event.log.new")
+	rf, err := os.OpenFile(oldPath, os.O_RDONLY|os.O_CREATE, 0644)
+	if err != nil {
+		return err
 	}
+	dec := json.NewDecoder(rf)
+
+	wf, err := os.OpenFile(newPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	if err != nil {
+		rf.Close()
+		return err
+	}
+	bw := bufio.NewWriter(wf)
+
+	for {
+		var ev event
+		if err := dec.Decode(&ev); err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			rf.Close()
+			wf.Close()
+			os.Remove(newPath)
+			return err
+		}
+		if ev.Lsn <= S {
+			continue
+		}
+		b, _ := json.Marshal(ev)
+		if _, err := bw.Write(append(b, '\n')); err != nil {
+			rf.Close()
+			wf.Close()
+			os.Remove(newPath)
+			return err
+		}
+	}
+	if err := bw.Flush(); err != nil {
+		rf.Close()
+		wf.Close()
+		os.Remove(newPath)
+		return err
+	}
+	if err := wf.Sync(); err != nil {
+		rf.Close()
+		wf.Close()
+		os.Remove(newPath)
+		return err
+	}
+	if err := wf.Close(); err != nil {
+		rf.Close()
+		os.Remove(newPath)
+		return err
+	}
+	if err := rf.Close(); err != nil {
+		os.Remove(newPath)
+		return err
+	}
+
+	// 교체 + 디렉터리 fsync
+	if err := os.Rename(newPath, oldPath); err != nil {
+		os.Remove(newPath)
+		return err
+	}
+	if err := fsyncDir(f.dirs); err != nil {
+		return err
+	}
+
+	// append 핸들 재오픈
+	af, err := os.OpenFile(oldPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		return err
+	}
+	f.eventLogFile = af
 	return nil
 }
 
-func writeSegmentFileMetadata() error {
-	// Implement logic to write segment file metadata to a persistent storage
-	if segmentMetadata == nil {
-		return fmt.Errorf("segment metadata file is not open")
-	}
-	minMessageID := int64(0)
-	segmentMetadata.Truncate(0) // Clear the file before writing new metadata
-	segmentMetadata.Seek(0, 0)  // Reset the file pointer to the beginning
-	for segmentFileName, lastMessageID := range segmentFileMetadataMap {
-		if _, err := segmentMetadata.WriteString(fmt.Sprintf("%s %d\n", segmentFileName, lastMessageID)); err != nil {
-			return fmt.Errorf("error writing segment file metadata: %v", err)
+func (f *fileManager) GetStatus() (internal.QueueStatus, error) {
+	f.mutex.Lock()
+	defer f.mutex.Unlock()
+
+	var consumerStatuses = make(map[string]internal.ConsumerStatus)
+	for consumerID, offset := range f.offsetMap {
+		lag := int64(0) // Calculate lag based on the latest message ID and consumer offset
+		queueLen := len(f.queue)
+		if queueLen > 0 {
+			current_index := f.msgIdToIdx[offset]
+			if current_index < queueLen {
+				lag = f.queue[queueLen-1].Id - f.queue[current_index].Id
+			}
 		}
-		if minMessageID == 0 || lastMessageID < minMessageID {
-			minMessageID = lastMessageID
+		consumerStatuses[consumerID] = internal.ConsumerStatus{
+			ConsumerID: consumerID,
+			LastOffset: offset,
+			Lag:        lag,
 		}
-	}
-	if err := segmentMetadata.Sync(); err != nil {
-		return fmt.Errorf("error syncing segment metadata file: %v", err)
 	}
 
-	// Delete old segment files if necessary
-	if err := deleteSegmentFile(minMessageID); err != nil {
-		return fmt.Errorf("error deleting old segment files: %v", err)
+	totalSegmentFiles := len(f.segmentFileMetadataMap) + 1 // +1 for the append log file
+	extraInfo := map[string]interface{}{
+		"TotalSegmentFiles": totalSegmentFiles,
+		"LatestLSN":         f.LSN,
+		"AppliedLSN":        f.appliedLSN,
 	}
-	return nil
+
+	status := internal.QueueStatus{
+		QueueType:        "file",
+		ActiveConsumers:  len(f.offsetMap),
+		ExtraInfo:        extraInfo,
+		ConsumerStatuses: consumerStatuses,
+	}
+
+	return status, nil
 }
