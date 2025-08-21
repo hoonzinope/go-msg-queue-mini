@@ -122,18 +122,6 @@ func (q *memoryQueue) Nack(consumerID string, messageID int64) error {
 	if messageID == 0 {
 		return fmt.Errorf("message ID is zero")
 	}
-	// Check if the message exists in the queue
-	var found bool
-	for i, msg := range q.items {
-		if msg.Id == messageID {
-			q.offsetMap[consumerID] = i - 1 // Update the offset (not yet acknowledged) for the consumer
-			found = true
-			break
-		}
-	}
-	if !found {
-		return fmt.Errorf("message with ID %d not found", messageID)
-	}
 
 	// Increment the retry count for the message
 	if _, ok := q.retryMap[consumerID]; !ok {
@@ -146,8 +134,17 @@ func (q *memoryQueue) Nack(consumerID string, messageID int64) error {
 		// If max retries exceeded, move to dead-letter queue
 		for i, msg := range q.items {
 			if msg.Id == messageID {
-				q.dlq = append(q.dlq, msg)                // Add to dead-letter queue
-				q.offsetMap[consumerID] = i               // Update offset for the consumer
+				q.dlq = append(q.dlq, msg) // Add to dead-letter queue
+				// Remove message from the main queue
+				q.items = append(q.items[:i], q.items[i+1:]...)
+
+				// Adjust offsets for all consumers that were pointing at or past the removed message
+				for id, offset := range q.offsetMap {
+					if offset >= i {
+						q.offsetMap[id]--
+					}
+				}
+
 				delete(q.retryMap[consumerID], messageID) // Remove from retry map
 				if len(q.retryMap[consumerID]) == 0 {
 					delete(q.retryMap, consumerID) // Clean up empty retry map

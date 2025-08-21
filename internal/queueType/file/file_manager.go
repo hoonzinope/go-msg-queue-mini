@@ -54,6 +54,17 @@ type event struct {
 	Data interface{}
 }
 
+type nack struct {
+	ConsumerID string
+	MessageID  int64
+	RetryCount int
+}
+
+type ack struct {
+	ConsumerID string
+	MessageID  int64
+}
+
 func NewFileManager(logDir string, maxSizeMB int, maxAgeDays int) (*fileManager, error) {
 	if logDir == "" {
 		return nil, fmt.Errorf("log directory path is empty")
@@ -320,34 +331,44 @@ func (f *fileManager) replayEventLog() error {
 func (f *fileManager) applyEvent(ev event) {
 	switch ev.Type {
 	case "ENQUEUE":
-		msg, ok := ev.Data.(internal.Msg)
-		if !ok {
-			fmt.Printf("Error asserting message type: %v\n", ev.Data)
+		var msg internal.Msg
+		if err := remarshal(ev.Data, &msg); err != nil {
+			fmt.Printf("Error remarshalling ENQUEUE event data: %v\n", err)
 			return
 		}
 		f.queue = append(f.queue, msg)          // Add message to the queue
 		f.msgIdToIdx[msg.Id] = len(f.queue) - 1 // Update message ID to index map
 
 	case "ACK":
-		data := ev.Data.(map[string]interface{})
-		consumerID := data["consumerID"].(string)
-		messageID := int64(data["messageID"].(int64))
+		ackData := ack{}
+		if err := remarshal(ev.Data, &ackData); err != nil {
+			fmt.Printf("Error remarshalling ACK event data: %v\n", err)
+			return
+		}
+		consumerID := ackData.ConsumerID
+		messageID := ackData.MessageID
 		f.offsetMap[consumerID] = messageID // Update offset for the consumer
 
 	case "NACK":
-		data := ev.Data.(map[string]interface{})
-		consumerID := data["consumerID"].(string)
-		messageID := int64(data["messageID"].(int64))
-		retryCount := int(data["retryCount"].(int64))
+		fmt.Println("Processing NACK event")
+		nackdata := nack{}
+		if err := remarshal(ev.Data, &nackdata); err != nil {
+			fmt.Printf("Error remarshalling NACK event data: %v\n", err)
+			return
+		}
+
+		consumerID := nackdata.ConsumerID
+		messageID := nackdata.MessageID
+		retryCount := nackdata.RetryCount
 		if _, ok := f.retryMap[consumerID]; !ok {
 			f.retryMap[consumerID] = make(map[int64]int)
 		}
 		f.retryMap[consumerID][messageID] = retryCount // Update retry count for the message
 
 	case "DLQ":
-		msg, ok := ev.Data.(internal.Msg)
-		if !ok {
-			fmt.Printf("Error asserting dead-letter queue message type: %v\n", ev.Data)
+		var msg internal.Msg
+		if err := remarshal(ev.Data, &msg); err != nil {
+			fmt.Printf("Error remarshalling dead-letter queue message data: %v\n", err)
 			return
 		}
 		f.deadLetterQueue = append(f.deadLetterQueue, msg) // Add message to the dead-letter queue
@@ -399,16 +420,16 @@ func (f *fileManager) WriteOffset(consumerID string, messageID int64) error {
 	if messageID == 0 {
 		return fmt.Errorf("message ID is zero")
 	}
-
+	ackEvent := ack{
+		ConsumerID: consumerID,
+		MessageID:  messageID,
+	}
 	f.LSN++
 	event := event{
 		Lsn:  f.LSN,
 		Ts:   time.Now().UnixNano(),
 		Type: "ACK",
-		Data: map[string]interface{}{
-			"consumerID": consumerID,
-			"messageID":  messageID,
-		},
+		Data: ackEvent,
 	}
 	if err := f.writeEventToLog(event); err != nil {
 		return fmt.Errorf("error writing event to log: %v", err)
@@ -438,16 +459,17 @@ func (f *fileManager) WriteRetry(consumerID string, messageID int64, MaxRetry in
 		f.retryMap[consumerID] = make(map[int64]int)
 	}
 	retryCount := f.retryMap[consumerID][messageID] + 1 // Increment retry count
+	nackEvent := nack{
+		ConsumerID: consumerID,
+		MessageID:  messageID,
+		RetryCount: retryCount,
+	}
 	f.LSN++
 	var ev = event{
 		Lsn:  f.LSN,
 		Ts:   time.Now().UnixNano(),
 		Type: "NACK",
-		Data: map[string]interface{}{
-			"consumerID": consumerID,
-			"messageID":  fmt.Sprintf("%d", messageID), // message ID (int64) -> string
-			"retryCount": retryCount,
-		},
+		Data: nackEvent,
 	}
 	if err := f.writeEventToLog(ev); err != nil {
 		return fmt.Errorf("error writing event to log: %v", err)
@@ -657,24 +679,18 @@ func (f *fileManager) saveEventToMetadata() error {
 	}
 
 	// cutId 이전 message를 queue에서 제거 & msgIdToIdx 갱신
-	var start_index = 0
 	for i := 0; i < len(f.queue); i++ {
 		if f.queue[i].Id <= cutID {
 			continue
 		}
 		// cutID 이후 메시지만 남김
 		f.queue = f.queue[i:]
-		start_index = i
 		break
 	}
 	// msgIdToIdx 갱신
-	for id, index := range f.msgIdToIdx {
-		if index <= start_index {
-			delete(f.msgIdToIdx, id) // cutID 이전 메시지는 제거
-		} else if index >= len(f.queue) {
-			// 인덱스가 범위를 벗어난 경우, 새 인덱스로 갱신
-			f.msgIdToIdx[id] = index - start_index
-		}
+	f.msgIdToIdx = make(map[int64]int, len(f.queue))
+	for i, msg := range f.queue {
+		f.msgIdToIdx[msg.Id] = i
 	}
 
 	// 3) segment 스냅샷 파일 작성: (cutID < id ≤ S) && !DLQ 에 해당하는 **이번 증분 ENQUEUE만**
@@ -797,11 +813,8 @@ func (f *fileManager) saveEventToMetadata() error {
 	}
 
 	// 6) snapshot.lsn 커밋 (원자 포인터)
-	if err := atomicWrite(f.snapshotLSN, func(file *os.File) error {
-		_, err := fmt.Fprintf(file, "%d\n", S)
-		return err
-	}); err != nil {
-		return fmt.Errorf("write snapshot.lsn: %w", err)
+	if err := f.saveSnapshotLSN(S); err != nil {
+		return fmt.Errorf("save snapshot lsn: %w", err)
 	}
 
 	// 7) WAL truncate/rotate (별도 함수로 실행)
@@ -811,6 +824,17 @@ func (f *fileManager) saveEventToMetadata() error {
 	fmt.Println("segment file metadata map:", f.segmentFileMetadataMap)
 	// 8) 메모리 경계 업데이트
 	f.appliedLSN = S
+	return nil
+}
+
+func (f *fileManager) saveSnapshotLSN(S int64) error {
+	// 6) snapshot.lsn 커밋 (원자 포인터)
+	if err := atomicWrite(f.snapshotLSN, func(file *os.File) error {
+		_, err := fmt.Fprintf(file, "%d\n", S)
+		return err
+	}); err != nil {
+		return fmt.Errorf("write snapshot.lsn: %w", err)
+	}
 	return nil
 }
 

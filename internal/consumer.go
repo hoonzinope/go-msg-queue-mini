@@ -24,7 +24,7 @@ func _consume(queue Queue, name string) {
 	messages, err := queue.Dequeue(name, 10) // Dequeue up to 10 messages
 	if err == nil {
 		for _, msg := range messages {
-			// Simulate message processing failure randomly (1 in 4 chance of failure)
+			// Simulate message processing failure randomly (1 in 3 chance of failure)
 			if util.GenerateNumber(1, 3) == 1 {
 				fmt.Printf("Consumer %s: NACKing message %d, data: %s\n", name, msg.Id, msg.Item.(string))
 				if err := queue.Nack(name, msg.Id); err != nil {
