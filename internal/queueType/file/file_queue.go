@@ -9,10 +9,12 @@ import (
 )
 
 type fileQueue struct {
-	mutex sync.Mutex
+	maxRetry    int // Maximum number of retries for message processing
+	mutex       sync.Mutex
+	fileManager *fileManager // File manager for handling file operations
 }
 
-func NewFileQueue(logdirs string, maxSizeMB int, maxAgeDays int) (*fileQueue, error) {
+func NewFileQueue(logdirs string, maxSizeMB int, maxAgeDays int, maxRetry int) (*fileQueue, error) {
 	if logdirs == "" {
 		fmt.Println("Log directory path is empty - error initializing file queue")
 		return nil, fmt.Errorf("log directory path is empty")
@@ -26,25 +28,34 @@ func NewFileQueue(logdirs string, maxSizeMB int, maxAgeDays int) (*fileQueue, er
 	}
 
 	// Initialize the file queue
-	if err := OpenFiles(logdirs, maxSizeMB, maxAgeDays); err != nil {
+	fm, err := NewFileManager(logdirs, maxSizeMB, maxAgeDays)
+	if err != nil {
+		return nil, fmt.Errorf("error initializing file manager: %v", err)
+	}
+	if err := fm.OpenFiles(); err != nil {
 		return nil, fmt.Errorf("error opening files: %v", err)
 	}
 
 	fileQueue := &fileQueue{
-		mutex: sync.Mutex{},
+		mutex:       sync.Mutex{},
+		maxRetry:    maxRetry,
+		fileManager: fm,
 	}
 
 	return fileQueue, nil
 }
 
 func (q *fileQueue) Enqueue(item interface{}) error {
+	q.mutex.Lock()
+	defer q.mutex.Unlock()
+
 	id := time.Now().UnixNano() // Use current time as a unique ID
 	msg := internal.Msg{
 		Id:   id,
 		Item: item,
 	}
 	// Append the message to the append log file
-	if err := WriteMsgToSegment(msg); err != nil {
+	if err := q.fileManager.WriteMsg(msg); err != nil {
 		fmt.Printf("Error writing message to segment: %v\n", err)
 		return err
 	}
@@ -63,7 +74,7 @@ func (q *fileQueue) Dequeue(consumerID string, maxCount int) ([]internal.Msg, er
 	}
 
 	// Read messages for the consumer
-	messages, err := ReadMsgForConsumer(consumerID, maxCount)
+	messages, err := q.fileManager.ReadMsg(consumerID, maxCount)
 	if err != nil {
 		return nil, fmt.Errorf("error reading messages for consumer %s: %v", consumerID, err)
 	}
@@ -85,10 +96,27 @@ func (q *fileQueue) Ack(consumerID string, messageID int64) error {
 	}
 
 	// Update the offset for the consumer
-	if err := WriteOffset(consumerID, messageID); err != nil {
+	if err := q.fileManager.WriteOffset(consumerID, messageID); err != nil {
 		return fmt.Errorf("error writing offset for consumer %s: %v", consumerID, err)
 	}
 
+	return nil
+}
+
+func (q *fileQueue) Nack(consumerID string, messageID int64) error {
+	q.mutex.Lock()
+	defer q.mutex.Unlock()
+
+	if consumerID == "" {
+		return fmt.Errorf("consumer ID is empty")
+	}
+	if messageID == 0 {
+		return fmt.Errorf("message ID is zero")
+	}
+
+	if err := q.fileManager.WriteRetry(consumerID, messageID, q.maxRetry); err != nil {
+		return fmt.Errorf("error writing retry for consumer %s: %v", consumerID, err)
+	}
 	return nil
 }
 
@@ -97,7 +125,7 @@ func (q *fileQueue) Shutdown() error {
 	defer q.mutex.Unlock()
 
 	// Close all segment files
-	if err := CloseFiles(); err != nil {
+	if err := q.fileManager.CloseFiles(); err != nil {
 		return fmt.Errorf("error closing segment files: %v", err)
 	}
 
@@ -109,31 +137,9 @@ func (q *fileQueue) Status() (internal.QueueStatus, error) {
 	q.mutex.Lock()
 	defer q.mutex.Unlock()
 
-	var consumerStatuses = make(map[string]internal.ConsumerStatus)
-	for consumerID, offset := range offsetMap {
-		lag := int64(0) // Calculate lag based on the latest message ID and consumer offset
-		if latestMessageID > offset {
-			lag = latestMessageID - offset
-		}
-		consumerStatuses[consumerID] = internal.ConsumerStatus{
-			ConsumerID: consumerID,
-			LastOffset: offset,
-			Lag:        lag,
-		}
+	status, err := q.fileManager.GetStatus()
+	if err != nil {
+		return internal.QueueStatus{}, fmt.Errorf("error getting queue status: %v", err)
 	}
-
-	totalSegmentFiles := len(segmentFileMetadataMap) + 1 // +1 for the append log file
-	extraInfo := map[string]interface{}{
-		"TotalSegmentFiles": totalSegmentFiles,
-		"LatestMessageID":   latestMessageID,
-	}
-
-	status := internal.QueueStatus{
-		QueueType:        "file",
-		ActiveConsumers:  len(offsetMap),
-		ExtraInfo:        extraInfo,
-		ConsumerStatuses: consumerStatuses,
-	}
-
 	return status, nil
 }

@@ -25,14 +25,19 @@ func main() {
 		fmt.Printf("Error reading config: %v\n", err)
 		return
 	}
+	maxRetry := config.MaxRetry
+	if maxRetry <= 0 {
+		fmt.Println("Max retry must be greater than 0. Using default value of 3.")
+		maxRetry = 3
+	}
 	// Create a new queue
 	if config.Persistence.Type == "" || config.Persistence.Type == "memory" {
-		queue = memoryqueue.NewMemoryQueue()
+		queue = memoryqueue.NewMemoryQueue(maxRetry)
 	} else if config.Persistence.Type == "file" {
 		logdirs := config.Persistence.Options.DirsPath
 		maxSize := config.Persistence.Options.MaxSize
 		maxAge := config.Persistence.Options.MaxAge
-		queue, err = filequeue.NewFileQueue(logdirs, maxSize, maxAge)
+		queue, err = filequeue.NewFileQueue(logdirs, maxSize, maxAge, maxRetry)
 		if err != nil {
 			fmt.Printf("Error initializing file queue: %v\n", err)
 			return

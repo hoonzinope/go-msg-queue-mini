@@ -16,6 +16,7 @@ type Config struct {
 			MaxAge   int    `yaml:"max-age"`  // Maximum age of the file in days
 		} `yaml:"options"`
 	} `yaml:"persistence"`
+	MaxRetry int `yaml:"max-retry"` // Maximum number of retries for message processing
 }
 
 func ReadConfig(filePath string) (*Config, error) {
