@@ -282,27 +282,31 @@ func (m *fileDBManager) NackMessage(group string, msgID int64, backoffSec time.D
 
 func (m *fileDBManager) GetStatus() (internal.QueueStatus, error) {
 	var status internal.QueueStatus = internal.QueueStatus{
-		QueueType: "fileDB",
+		QueueType:        "fileDB",
+		TotalMessages:    0,
+		AckedMessages:    0,
+		InflightMessages: 0,
+		DLQMessages:      0,
 	}
-	// // total messages
-	// row := m.db.QueryRow(`SELECT COUNT(*) FROM queue`)
-	// if err := row.Scan(&status.TotalMessages); err != nil {
-	// 	return status, err
-	// }
-	// // acked messages
-	// row = m.db.QueryRow(`SELECT COUNT(*) FROM acked`)
-	// if err := row.Scan(&status.AckedMessages); err != nil {
-	// 	return status, err
-	// }
-	// // inflight messages
-	// row = m.db.QueryRow(`SELECT COUNT(*) FROM inflight`)
-	// if err := row.Scan(&status.InflightMessages); err != nil {
-	// 	return status, err
-	// }
-	// // dlq messages
-	// row = m.db.QueryRow(`SELECT COUNT(*) FROM dlq`)
-	// if err := row.Scan(&status.DLQMessages); err != nil {
-	// 	return status, err
-	// }
+	// total messages
+	row := m.db.QueryRow(`SELECT COUNT(*) FROM queue`)
+	if err := row.Scan(&status.TotalMessages); err != nil {
+		return status, err
+	}
+	// acked messages
+	row = m.db.QueryRow(`SELECT COUNT(*) FROM acked`)
+	if err := row.Scan(&status.AckedMessages); err != nil {
+		return status, err
+	}
+	// inflight messages
+	row = m.db.QueryRow(`SELECT COUNT(*) FROM inflight`)
+	if err := row.Scan(&status.InflightMessages); err != nil {
+		return status, err
+	}
+	// dlq messages
+	row = m.db.QueryRow(`SELECT COUNT(*) FROM dlq`)
+	if err := row.Scan(&status.DLQMessages); err != nil {
+		return status, err
+	}
 	return status, nil
 }

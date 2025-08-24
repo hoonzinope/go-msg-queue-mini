@@ -77,11 +77,11 @@ func main() {
 
 	fmt.Println("Message queue is running. Press Ctrl+C to stop.")
 
-	// wg.Add(1)
-	// go func() {
-	// 	defer wg.Done()
-	// 	internal.MonitoringStatus(ctx, queue) // Start monitoring the queue status
-	// }()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		internal.MonitoringStatus(ctx, queue) // Start monitoring the queue status
+	}()
 
 	<-quit
 	fmt.Println("Stopping message queue...")

@@ -20,16 +20,10 @@ func MonitoringStatus(ctx context.Context, queue Queue) {
 				fmt.Printf("Error fetching queue status: %v\n", err)
 			}
 			fmt.Printf("--- Queue Status ---\n")
-			fmt.Printf("Queue Type: %s\n", status.QueueType)
-			fmt.Printf("Active Consumers: %d\n", status.ActiveConsumers)
-			for key, info := range status.ExtraInfo {
-				fmt.Printf("Extra Info - %s: %v\n", key, info)
-			}
-			fmt.Printf("Consumer Statuses:\n")
-			for consumerID, consumerStatus := range status.ConsumerStatuses {
-				fmt.Printf("  - Consumer ID: %s, Last Offset: %d, Lag: %d\n",
-					consumerID, consumerStatus.LastOffset, consumerStatus.Lag)
-			}
+			fmt.Printf("Total Messages: %d\n", status.TotalMessages)
+			fmt.Printf("Acked Messages: %d\n", status.AckedMessages)
+			fmt.Printf("Inflight Messages: %d\n", status.InflightMessages)
+			fmt.Printf("DLQ Messages: %d\n", status.DLQMessages)
 			fmt.Printf("---------------------\n")
 		}
 	}
