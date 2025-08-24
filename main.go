@@ -4,8 +4,7 @@ import (
 	"context"
 	"fmt"
 	"go-msg-queue-mini/internal"
-	filequeue "go-msg-queue-mini/internal/queueType/file"
-	memoryqueue "go-msg-queue-mini/internal/queueType/memory"
+	fileDBQueue "go-msg-queue-mini/internal/queueType/fileDB"
 	"os"
 	"os/signal"
 	"sync"
@@ -25,57 +24,64 @@ func main() {
 		fmt.Printf("Error reading config: %v\n", err)
 		return
 	}
-	maxRetry := config.MaxRetry
-	if maxRetry <= 0 {
-		fmt.Println("Max retry must be greater than 0. Using default value of 3.")
-		maxRetry = 3
-	}
 	// Create a new queue
-	if config.Persistence.Type == "" || config.Persistence.Type == "memory" {
-		queue = memoryqueue.NewMemoryQueue(maxRetry)
-	} else if config.Persistence.Type == "file" {
-		logdirs := config.Persistence.Options.DirsPath
-		maxSize := config.Persistence.Options.MaxSize
-		maxAge := config.Persistence.Options.MaxAge
-		queue, err = filequeue.NewFileQueue(logdirs, maxSize, maxAge, maxRetry)
+	switch config.Persistence.Type {
+	case "", "memory":
+		queue, err = fileDBQueue.NewFileDBQueue(config)
+		if err != nil {
+			fmt.Printf("Error initializing file DB queue: %v\n", err)
+			return
+		}
+	case "file":
+		queue, err = fileDBQueue.NewFileDBQueue(config)
 		if err != nil {
 			fmt.Printf("Error initializing file queue: %v\n", err)
 			return
 		}
+	default:
+		fmt.Printf("Unsupported persistence type: %s\n", config.Persistence.Type)
+		return
 	}
 
+	var group_name string = "default"
 	wg := sync.WaitGroup{}
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		internal.Consume(ctx, queue, "consumer1") // Start consuming messages
+		internal.Consume(ctx, queue, group_name, "consumer_1") // Start consuming messages
 	}()
 
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		internal.Consume(ctx, queue, "consumer2") // Start consuming messages
+		internal.Consume(ctx, queue, group_name, "consumer_2") // Start consuming messages
+	}()
+
+	// wg.Add(1)
+	// go func() {
+	// 	defer wg.Done()
+	// 	internal.Consume(ctx, queue, "log", "consumer_1") // Start consuming messages
+	// }()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		internal.Produce(ctx, queue, group_name) // Start producing messages
 	}()
 
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		internal.Produce(ctx, queue, "producer1") // Start producing messages
-	}()
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		internal.Produce(ctx, queue, "producer2") // Start producing messages
+		internal.Produce(ctx, queue, group_name) // Start producing messages
 	}()
 
 	fmt.Println("Message queue is running. Press Ctrl+C to stop.")
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		internal.MonitoringStatus(ctx, queue) // Start monitoring the queue status
-	}()
+	// wg.Add(1)
+	// go func() {
+	// 	defer wg.Done()
+	// 	internal.MonitoringStatus(ctx, queue) // Start monitoring the queue status
+	// }()
 
 	<-quit
 	fmt.Println("Stopping message queue...")

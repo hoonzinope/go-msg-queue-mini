@@ -1,0 +1,104 @@
+package fileDB
+
+import (
+	"encoding/json"
+	"fmt"
+	"go-msg-queue-mini/internal"
+	"sync"
+)
+
+type fileDBQueue struct {
+	manager   *fileDBManager
+	mu        sync.Mutex
+	groupLock map[string]*sync.Mutex
+	maxRetry  int
+}
+
+func NewFileDBQueue(config *internal.Config) (*fileDBQueue, error) {
+	dbpath := config.Persistence.Options.DirsPath
+	dbpath += "/filedb_queue.db?cache=shared&_journal_mode=WAL"
+	if config.Persistence.Type == "memory" {
+		dbpath = ":memory:"
+	}
+
+	manager, err := NewFileDBManager(dbpath)
+	if err != nil {
+		return nil, err
+	}
+	fq := &fileDBQueue{
+		manager:   manager,
+		groupLock: map[string]*sync.Mutex{},
+		maxRetry:  config.MaxRetry,
+	}
+	return fq, nil
+}
+
+func (q *fileDBQueue) Lock(group string) func() {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	groupLock, ok := q.groupLock[group]
+	if !ok {
+		groupLock = &sync.Mutex{}
+		q.groupLock[group] = groupLock
+	}
+	groupLock.Lock()
+	return func() {
+		groupLock.Unlock()
+	}
+}
+
+func (q *fileDBQueue) Enqueue(group_name string, item interface{}) error {
+	msg, err := json.Marshal(item)
+	if err != nil {
+		return err
+	}
+	if err := q.manager.WriteMessage(msg); err != nil {
+		fmt.Println("Error writing message to queue:", err)
+		return err
+	}
+	return nil
+}
+
+func (q *fileDBQueue) Dequeue(consumer_group string, consumer_id string) (any, int64, error) {
+	unLock := q.Lock(consumer_group)
+	defer unLock()
+
+	queueMsg, err := q.manager.ReadMessage(consumer_group, consumer_id, 3)
+	if err != nil {
+		return nil, -1, err
+	}
+	var item any
+	if err := json.Unmarshal(queueMsg.Msg, &item); err != nil {
+		return nil, -1, err
+	}
+	return item, queueMsg.Id, nil
+}
+
+func (q *fileDBQueue) Ack(consumer_group string, msg_id int64) error {
+	if err := q.manager.AckMessage(consumer_group, msg_id); err != nil {
+		fmt.Println("Error acknowledging message:", err)
+		return err
+	}
+	return nil
+}
+
+func (q *fileDBQueue) Nack(consumer_group string, msg_id int64) error {
+	if err := q.manager.NackMessage(consumer_group, msg_id, 3, q.maxRetry, "Nack Message"); err != nil {
+		fmt.Println("Error not acknowledging message:", err)
+		return err
+	}
+	return nil
+}
+
+func (q *fileDBQueue) Shutdown() error {
+	if err := q.manager.Close(); err != nil {
+		fmt.Println("Error shutting down queue:", err)
+		return err
+	}
+	return nil
+}
+
+func (q *fileDBQueue) Status() (internal.QueueStatus, error) {
+	return q.manager.GetStatus()
+}
