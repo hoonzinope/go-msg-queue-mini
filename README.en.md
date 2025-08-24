@@ -2,29 +2,36 @@
 
 [한국어](./README.md)
 
+This is a simple message queue system written in Go. It is based on the Producer-Consumer pattern and uses **SQLite** to ensure message persistence.
 
-This is a simple in-memory message queue implemented in Go. It demonstrates the basic concepts of a producer-consumer system using goroutines and channels.
+## Key Features
+
+-   **SQLite-based Persistence**: Messages are stored in a local SQLite database, so data is not lost even if the application restarts.
+-   **Concurrent Processing**: Multiple producers and consumers run concurrently as Goroutines to process messages efficiently.
+-   **Status Monitoring**: Periodically monitors and logs the status of the queue (e.g., total, in-flight, acknowledged, DLQ message counts).
+-   **Graceful Shutdown**: Ensures that all Goroutines shut down safely using `context` and `sync.WaitGroup`.
+-   **Guaranteed Message Processing**: Guarantees message processing through an `inflight` queue, an `Ack/Nack` mechanism, and a Dead-Letter Queue (DLQ).
 
 ## Project Structure
 
 ```
 /Users/hoonzi/go-proj/go-msg-qu-mini/
-├───go.mod
-├───main.go
-├───.git/...
-├───internal/
-│   ├───consumer.go
-│   ├───producer.go
-│   └───queue.go
-└───util/
-    └───randomStr.go
+├───main.go                # Application entry point
+├───config.yml             # Queue configuration file
+├───go.mod                 # Go modules and dependency management
+├───internal/              # Internal logic packages
+│   ├───queue.go           # Queue interface definition
+│   ├───producer.go        # Message producer logic
+│   ├───consumer.go        # Message consumer logic
+│   ├───config.go          # Configuration file parsing logic
+│   ├───stat.go            # Queue status monitoring logic
+│   └───queueType/         # Queue type implementation
+│       └───fileDB/          # SQLite-based queue implementation
+│           ├───filedb_queue.go    # fileDB queue logic
+│           └───filedb_manager.go  # SQLite DB management and queries
+└───util/                  # Utility functions
+    └───randomStr.go       # Random string generator
 ```
-
-- **main.go**: The entry point of the application. It initializes the queue and starts the producer and consumer goroutines.
-- **internal/queue.go**: Implements a simple thread-safe queue using `container/list`.
-- **internal/producer.go**: The producer generates random messages and puts them into the queue.
-- **internal/consumer.go**: The consumer retrieves messages from the queue and prints them to the console.
-- **util/randomStr.go**: A utility for generating random strings for the messages.
 
 ## How to Run
 
@@ -33,15 +40,24 @@ This is a simple in-memory message queue implemented in Go. It demonstrates the 
     git clone https://github.com/your-username/go-msg-queue-mini.git
     cd go-msg-queue-mini
     ```
-2.  **Run the application:**
+
+2.  **Install dependencies:**
+    ```bash
+    go mod tidy
+    ```
+
+3.  **Configuration (Optional):**
+    Open the `config.yml` file to modify necessary settings, such as the database file path (`persistence.options.dirs-path`).
+
+4.  **Run the application:**
     ```bash
     go run main.go
     ```
 
-The application will start, and you will see messages being produced and consumed in the console. Press `Ctrl+C` to stop the application.
+Once the application starts, you can see message production/consumption and queue status logs in the console. Press `Ctrl+C` to shut down the application gracefully.
 
 ## Key Concepts
 
-- **Goroutines**: The producer and consumer run concurrently as goroutines.
-- **Channels**: While this example uses a simple queue, channels are a more idiomatic way to handle communication between goroutines in Go.
-- **Producer-Consumer Pattern**: A classic concurrency pattern where one or more producers generate data and one or more consumers process it.
+-   **Producer-Consumer Pattern**: A classic concurrency pattern where one or more producers generate data and one or more consumers process it.
+-   **Goroutines**: Producers and consumers run concurrently as Goroutines to achieve high throughput.
+-   **SQLite Persistence**: Messages are stored in the `queue` table of a SQLite database. When a consumer retrieves a message, it is moved to the `inflight` table to track its processing status. Upon completion, it is moved to the `acked` table, or to the `dlq` table if it fails.
