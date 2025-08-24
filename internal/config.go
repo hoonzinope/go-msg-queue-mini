@@ -14,7 +14,8 @@ type Config struct {
 			DirsPath string `yaml:"dirs-path"`
 		} `yaml:"options"`
 	} `yaml:"persistence"`
-	MaxRetry int `yaml:"max-retry"` // Maximum number of retries for message processing
+	MaxRetry      int    `yaml:"max-retry"`      // Maximum number of retries for message processing
+	RetryInterval string `yaml:"retry-interval"` // Interval between retries
 }
 
 func ReadConfig(filePath string) (*Config, error) {

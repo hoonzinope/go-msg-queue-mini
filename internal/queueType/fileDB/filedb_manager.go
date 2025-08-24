@@ -230,7 +230,7 @@ func (m *fileDBManager) AckMessage(group string, msgID int64) (err error) {
 	return nil
 }
 
-func (m *fileDBManager) NackMessage(group string, msgID int64, backoffSec, maxDeliveries int, reason string) (err error) {
+func (m *fileDBManager) NackMessage(group string, msgID int64, backoffSec time.Duration, maxDeliveries int, reason string) (err error) {
 	tx, err := m.db.Begin()
 	if err != nil {
 		return err
@@ -242,6 +242,7 @@ func (m *fileDBManager) NackMessage(group string, msgID int64, backoffSec, maxDe
 			err = tx.Commit()
 		}
 	}()
+	backoffSecInt := int(backoffSec.Seconds())
 
 	if _, err = tx.Exec(`
         UPDATE inflight
@@ -249,7 +250,7 @@ func (m *fileDBManager) NackMessage(group string, msgID int64, backoffSec, maxDe
             delivery_count = delivery_count + 1,
             last_error     = ?
         WHERE group_name = ? AND q_id = ?
-    `, backoffSec, reason, group, msgID); err != nil {
+    `, backoffSecInt, reason, group, msgID); err != nil {
 		return err
 	}
 

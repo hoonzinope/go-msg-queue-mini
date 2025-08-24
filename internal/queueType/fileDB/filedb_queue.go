@@ -5,13 +5,15 @@ import (
 	"fmt"
 	"go-msg-queue-mini/internal"
 	"sync"
+	"time"
 )
 
 type fileDBQueue struct {
-	manager   *fileDBManager
-	mu        sync.Mutex
-	groupLock map[string]*sync.Mutex
-	maxRetry  int
+	manager       *fileDBManager
+	mu            sync.Mutex
+	groupLock     map[string]*sync.Mutex
+	maxRetry      int
+	retryInterval string
 }
 
 func NewFileDBQueue(config *internal.Config) (*fileDBQueue, error) {
@@ -26,9 +28,10 @@ func NewFileDBQueue(config *internal.Config) (*fileDBQueue, error) {
 		return nil, err
 	}
 	fq := &fileDBQueue{
-		manager:   manager,
-		groupLock: map[string]*sync.Mutex{},
-		maxRetry:  config.MaxRetry,
+		manager:       manager,
+		groupLock:     map[string]*sync.Mutex{},
+		maxRetry:      config.MaxRetry,
+		retryInterval: config.RetryInterval,
 	}
 	return fq, nil
 }
@@ -64,15 +67,19 @@ func (q *fileDBQueue) Dequeue(consumer_group string, consumer_id string) (any, i
 	unLock := q.Lock(consumer_group)
 	defer unLock()
 
-	queueMsg, err := q.manager.ReadMessage(consumer_group, consumer_id, 3)
+	msg, err := q.manager.ReadMessage(consumer_group, consumer_id, 3)
 	if err != nil {
 		return nil, -1, err
 	}
 	var item any
-	if err := json.Unmarshal(queueMsg.Msg, &item); err != nil {
+	if err := json.Unmarshal(msg.Msg, &item); err != nil {
 		return nil, -1, err
 	}
-	return item, queueMsg.Id, nil
+	// if item empty
+	if item == nil {
+		return nil, -1, fmt.Errorf("no message available")
+	}
+	return item, msg.Id, nil
 }
 
 func (q *fileDBQueue) Ack(consumer_group string, msg_id int64) error {
@@ -84,7 +91,12 @@ func (q *fileDBQueue) Ack(consumer_group string, msg_id int64) error {
 }
 
 func (q *fileDBQueue) Nack(consumer_group string, msg_id int64) error {
-	if err := q.manager.NackMessage(consumer_group, msg_id, 3, q.maxRetry, "Nack Message"); err != nil {
+	maxRetry := q.maxRetry
+	retryInterval, err := time.ParseDuration(q.retryInterval)
+	if err != nil {
+		return fmt.Errorf("invalid retry interval: %w", err)
+	}
+	if err := q.manager.NackMessage(consumer_group, msg_id, retryInterval, maxRetry, "Nack Message"); err != nil {
 		fmt.Println("Error not acknowledging message:", err)
 		return err
 	}
