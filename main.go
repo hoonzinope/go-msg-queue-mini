@@ -75,13 +75,13 @@ func main() {
 		internal.Produce(ctx, queue, group_name) // Start producing messages
 	}()
 
-	fmt.Println("Message queue is running. Press Ctrl+C to stop.")
-
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		internal.MonitoringStatus(ctx, queue) // Start monitoring the queue status
 	}()
+
+	fmt.Println("Message queue is running. Press Ctrl+C to stop.")
 
 	<-quit
 	fmt.Println("Stopping message queue...")

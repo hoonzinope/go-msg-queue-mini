@@ -6,4 +6,4 @@ persistence:
   # type : memory # Use in-memory persistence for simplicity
 
 max-retry: 3 # Maximum number of retries for message processing
-retry-interval: 5s # Interval between retries
+retry-interval: 30s # Interval between retries
