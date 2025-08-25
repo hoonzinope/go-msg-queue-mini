@@ -12,6 +12,9 @@ func GenerateNumber(min int, max int) int {
 }
 
 func GenerateJitter(backoff int) int {
+	if backoff < 2 {
+		return backoff
+	}
 	jitter := rand.Intn(backoff / 2) // Generate a random jitter between 0 and backoff/2
 	return backoff + jitter
 }

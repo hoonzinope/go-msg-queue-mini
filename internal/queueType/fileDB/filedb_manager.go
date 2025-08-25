@@ -57,6 +57,7 @@ func (m *fileDBManager) intervalJob() error {
 	timer := time.NewTicker(time.Second * 5) // 5s
 	defer func() {
 		timer.Stop()
+		close(m.stopChan)
 	}()
 	for {
 		select {
@@ -285,7 +286,7 @@ func (m *fileDBManager) ReadMessage(group, consumerID string, leaseSec int) (_ q
           lease_until    = excluded.lease_until,
           delivery_count = inflight.delivery_count + 1,
           claimed_at     = CURRENT_TIMESTAMP
-		  WHERE inflight.lease_until <= CURRENT_TIMESTAMP;
+		  WHERE inflight.lease_until <= CURRENT_TIMESTAMP
     `, candID, group, consumerID, leaseSec, group, candID, group, candID)
 	if err != nil {
 		return queueMsg{}, err
