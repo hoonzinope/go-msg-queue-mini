@@ -17,8 +17,8 @@ type fileDBQueue struct {
 }
 
 func NewFileDBQueue(config *internal.Config) (*fileDBQueue, error) {
-	dbpath := config.Persistence.Options.DirsPath
-	dbpath += "/filedb_queue.db?cache=shared&_journal_mode=WAL"
+	dbpath := config.Persistence.Options.DirsPath + "/filedb_queue.db"
+	dbpath = fmt.Sprintf("file:%s?_txlock=immediate&_busy_timeout=5000&_journal=WAL&_sync=NORMAL", dbpath)
 	if config.Persistence.Type == "memory" {
 		dbpath = ":memory:"
 	}
@@ -69,8 +69,21 @@ func (q *fileDBQueue) Dequeue(consumer_group string, consumer_id string) (any, i
 
 	msg, err := q.manager.ReadMessage(consumer_group, consumer_id, 3)
 	if err != nil {
-		return nil, -1, err
+		switch err {
+		case ErrEmpty:
+			return nil, -1, ErrEmpty
+		case ErrContended:
+			return nil, -1, ErrContended
+		default:
+			return nil, -1, fmt.Errorf("unexpected error: %w", err)
+		}
 	}
+
+	// 매니저가 아직 (queueMsg{}, nil)로 빈 큐를 표현한다면 방어
+	if msg.Id == 0 || len(msg.Msg) == 0 {
+		return nil, -1, ErrEmpty
+	}
+
 	var item any
 	if err := json.Unmarshal(msg.Msg, &item); err != nil {
 		return nil, -1, err

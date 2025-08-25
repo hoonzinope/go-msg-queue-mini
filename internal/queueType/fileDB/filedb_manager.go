@@ -2,15 +2,21 @@ package fileDB
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"go-msg-queue-mini/internal"
+	"sync"
 	"time"
+
+	"go-msg-queue-mini/util"
 
 	_ "github.com/mattn/go-sqlite3"
 )
 
 type fileDBManager struct {
-	db *sql.DB
+	db       *sql.DB
+	stopChan chan struct{}
+	stopSync sync.Once
 }
 
 type queueMsg struct {
@@ -19,24 +25,122 @@ type queueMsg struct {
 	Insert_ts time.Time
 }
 
+var (
+	ErrEmpty     = errors.New("queue empty")
+	ErrContended = errors.New("contention: message not claimed")
+)
+
 func NewFileDBManager(dsn string) (*fileDBManager, error) {
 	db, err := sql.Open("sqlite3", dsn) // dsn: "file:/path/db.sqlite3"
 	if err != nil {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
-	if _, err := db.Exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=5000;`); err != nil {
+	if _, err := db.Exec(`PRAGMA auto_vacuum=INCREMENTAL; VACUUM;`); err != nil {
 		return nil, err
 	}
-	fm := &fileDBManager{db: db}
+	fm := &fileDBManager{
+		db:       db,
+		stopChan: make(chan struct{}),
+	}
 	if err := fm.initDB(); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
+	go func() {
+		_ = fm.intervalJob()
+	}()
 	return fm, nil
 }
 
+func (m *fileDBManager) intervalJob() error {
+	timer := time.NewTicker(time.Second * 5) // 5s
+	defer func() {
+		timer.Stop()
+	}()
+	for {
+		select {
+		case <-timer.C:
+			fmt.Println("@@@ Running periodic cleanup tasks...")
+			// 1. acked 테이블에서 오래된 항목 삭제
+			if err := m.deleteAckedMsg(); err != nil {
+				fmt.Println("Error deleting acked messages:", err)
+			}
+			// 2. queue 테이블에서 오래된 항목 삭제
+			if err := m.deleteQueueMsg(); err != nil {
+				fmt.Println("Error deleting queue messages:", err)
+			}
+			// 3. vacuum
+			if err := m.vacuum(); err != nil {
+				fmt.Println("Error during vacuum:", err)
+			}
+		case <-m.stopChan:
+			fmt.Println("@@@ Stopping periodic cleanup tasks...")
+			return nil
+		}
+	}
+}
+
+func (m *fileDBManager) deleteQueueMsg() error {
+	tx, err := m.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		} else {
+			err = tx.Commit()
+		}
+	}()
+	_, err = tx.Exec(`
+        DELETE FROM queue
+        WHERE id IN (
+            SELECT q.id
+            FROM queue q
+            LEFT JOIN inflight i ON i.q_id = q.id
+            WHERE i.q_id IS NULL
+              AND q.insert_ts <= DATETIME('now', '-1 days')
+        );
+    `)
+	return err
+}
+
+func (m *fileDBManager) deleteAckedMsg() error {
+	tx, err := m.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		} else {
+			err = tx.Commit()
+		}
+	}()
+	if _, err := tx.Exec(`DELETE FROM acked
+			WHERE acked_at <= DATETIME('now', '-1 days');`); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (m *fileDBManager) vacuum() error {
+	if _, err := m.db.Exec(`PRAGMA incremental_vacuum(1);`); err != nil {
+		fmt.Println("Error during vacuum:", err)
+		return err
+	}
+	return nil
+}
+
+func (m *fileDBManager) stop() error {
+	m.stopChan <- struct{}{}
+	return nil
+}
 func (m *fileDBManager) Close() error {
+	m.stopSync.Do(func() {
+		_ = m.stop()
+	})
 	return m.db.Close()
 }
 
@@ -160,7 +264,7 @@ func (m *fileDBManager) ReadMessage(group, consumerID string, leaseSec int) (_ q
         LIMIT 1
     `, group, group).Scan(&candID)
 	if err == sql.ErrNoRows {
-		return queueMsg{}, nil
+		return queueMsg{}, ErrEmpty
 	}
 	if err != nil {
 		return queueMsg{}, err
@@ -181,6 +285,7 @@ func (m *fileDBManager) ReadMessage(group, consumerID string, leaseSec int) (_ q
           lease_until    = excluded.lease_until,
           delivery_count = inflight.delivery_count + 1,
           claimed_at     = CURRENT_TIMESTAMP
+		  WHERE inflight.lease_until <= CURRENT_TIMESTAMP;
     `, candID, group, consumerID, leaseSec, group, candID, group, candID)
 	if err != nil {
 		return queueMsg{}, err
@@ -189,7 +294,7 @@ func (m *fileDBManager) ReadMessage(group, consumerID string, leaseSec int) (_ q
 	n, _ := res.RowsAffected()
 	if n == 0 {
 		// 경합으로 못 집었음 → 상위 레벨에서 재호출(또는 이 함수 내부에서 짧은 루프)
-		return queueMsg{}, nil
+		return queueMsg{}, ErrContended
 	}
 
 	// 3) 내가 점유한 메시지 반환 (consumer_id로 한정)
@@ -230,7 +335,7 @@ func (m *fileDBManager) AckMessage(group string, msgID int64) (err error) {
 	return nil
 }
 
-func (m *fileDBManager) NackMessage(group string, msgID int64, backoffSec time.Duration, maxDeliveries int, reason string) (err error) {
+func (m *fileDBManager) NackMessage(group string, msgID int64, backoff time.Duration, maxDeliveries int, reason string) (err error) {
 	tx, err := m.db.Begin()
 	if err != nil {
 		return err
@@ -242,7 +347,21 @@ func (m *fileDBManager) NackMessage(group string, msgID int64, backoffSec time.D
 			err = tx.Commit()
 		}
 	}()
-	backoffSecInt := int(backoffSec.Seconds())
+	backoffSecInt := int(backoff.Seconds()) // backoff를 초 단위 정수로 변환
+	// 지수적 backoff 증가
+	var retryCount int
+	if err = tx.QueryRow(
+		`SELECT delivery_count 
+		FROM inflight 
+		WHERE group_name = ? AND q_id = ?`,
+		group, msgID).Scan(&retryCount); err != nil {
+		return err
+	}
+
+	backoffSecInt = backoffSecInt * (1 << (retryCount - 1)) // 2^(retryCount-1) 배 증가
+	jitter := util.GenerateJitter(backoffSecInt)
+	backoffSecInt += jitter
+	backoffSecInt = max(1, min(backoffSecInt, 86400)) // 1초~24시간 클램프 예시
 
 	if _, err = tx.Exec(`
         UPDATE inflight
