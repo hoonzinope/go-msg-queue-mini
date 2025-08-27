@@ -15,7 +15,7 @@ func Produce(ctx context.Context, queue Queue, name string) {
 		default:
 			item := util.GenerateItem() // Generate a new item
 			_produce(item, queue, name)
-			second := util.GenerateNumber(1, 3)             // Generate a random number between 1 and 3
+			second := util.GenerateNumber(10, 13)           // Generate a random number between 1 and 3
 			time.Sleep(time.Duration(second) * time.Second) // Simulate processing time
 		}
 	}

@@ -7,7 +7,7 @@ import (
 )
 
 func MonitoringStatus(ctx context.Context, queue Queue) {
-	ticker := time.NewTicker(3 * time.Second)
+	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 	for {
 		select {

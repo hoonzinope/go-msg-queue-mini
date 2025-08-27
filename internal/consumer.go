@@ -15,25 +15,47 @@ func Consume(ctx context.Context, queue Queue, group_name, consumer_name string)
 			fmt.Printf("Consumer %s stopped.\n", consumer_name)
 			return
 		default:
+			_peek(queue, group_name)
 			_consume(queue, group_name, consumer_name)
 		}
 	}
 }
 
+func _peek(queue Queue, group_name string) {
+	queueMessage, err := queue.Peek(group_name)
+	if err != nil {
+		fmt.Printf("Error peeking message for %s: %v\n", group_name, err)
+		return
+	} else if queueMessage.ID == 0 {
+		return
+	}
+	fmt.Printf("Peeked by %s message: %v ID: %d Receipt: %s\n", group_name, queueMessage.Payload, queueMessage.ID, queueMessage.Receipt)
+}
+
 func _consume(queue Queue, group_name, consumer_name string) {
-	message, messageID, err := queue.Dequeue(group_name, consumer_name) // Dequeue up to 10 messages
+	queueMessage, err := queue.Dequeue(group_name, consumer_name)
+	message := queueMessage.Payload
+	messageID := queueMessage.ID
+	messageReceipt := queueMessage.Receipt
 	if err == nil {
-		fmt.Println("Dequeued by", consumer_name, "message:", message, "ID:", messageID)
+		fmt.Println("Dequeued by", consumer_name, "message:", message, "ID:", messageID, "Receipt:", messageReceipt)
 		// Simulate message processing failure randomly (1 in 3 chance of failure)
 		if util.GenerateNumber(1, 3) == 1 {
 			fmt.Printf("group :  %s NACKing message %d, data: %v\n", group_name, messageID, message)
-			if err := queue.Nack(group_name, messageID); err != nil {
+			if err := queue.Nack(group_name, messageID, messageReceipt); err != nil {
 				fmt.Printf("Error NACKing message %d for %s: %v\n", messageID, group_name, err)
+			} else {
+				// renew message
+				if err := queue.Renew(group_name, messageID, messageReceipt, 30); err != nil {
+					fmt.Printf("Renewing message %d for %s: %v\n", messageID, group_name, err)
+				} else {
+					fmt.Printf("Successfully renewed message %d for %s\n", messageID, group_name)
+				}
 			}
 			time.Sleep(100 * time.Millisecond) // Sleep to avoid busy loop
 		} else {
 			fmt.Printf("group :  %s ACKing message %d, data: %v\n", group_name, messageID, message)
-			if err := queue.Ack(group_name, messageID); err != nil {
+			if err := queue.Ack(group_name, messageID, messageReceipt); err != nil {
 				fmt.Printf("Error ACKing message %d for %s: %v\n", messageID, group_name, err)
 			}
 		}
