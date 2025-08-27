@@ -16,6 +16,7 @@ import (
 type fileDBManager struct {
 	db       *sql.DB
 	stopChan chan struct{}
+	doneChan chan struct{}
 	stopSync sync.Once
 }
 
@@ -23,11 +24,13 @@ type queueMsg struct {
 	Id        int64
 	Msg       []byte
 	Insert_ts time.Time
+	Receipt   string
 }
 
 var (
-	ErrEmpty     = errors.New("queue empty")
-	ErrContended = errors.New("contention: message not claimed")
+	ErrEmpty        = errors.New("queue empty")
+	ErrContended    = errors.New("contention: message not claimed")
+	ErrLeaseExpired = errors.New("lease expired")
 )
 
 func NewFileDBManager(dsn string) (*fileDBManager, error) {
@@ -42,6 +45,7 @@ func NewFileDBManager(dsn string) (*fileDBManager, error) {
 	fm := &fileDBManager{
 		db:       db,
 		stopChan: make(chan struct{}),
+		doneChan: make(chan struct{}),
 	}
 	if err := fm.initDB(); err != nil {
 		_ = db.Close()
@@ -57,7 +61,7 @@ func (m *fileDBManager) intervalJob() error {
 	timer := time.NewTicker(time.Second * 5) // 5s
 	defer func() {
 		timer.Stop()
-		close(m.stopChan)
+		close(m.doneChan)
 	}()
 	for {
 		select {
@@ -134,14 +138,15 @@ func (m *fileDBManager) vacuum() error {
 	return nil
 }
 
-func (m *fileDBManager) stop() error {
-	m.stopChan <- struct{}{}
-	return nil
-}
 func (m *fileDBManager) Close() error {
 	m.stopSync.Do(func() {
-		_ = m.stop()
+		close(m.stopChan)
 	})
+	select {
+	case <-m.doneChan:
+	case <-time.After(3 * time.Second):
+		fmt.Println("Timeout waiting for interval job to stop")
+	}
 	return m.db.Close()
 }
 
@@ -182,6 +187,7 @@ func (m *fileDBManager) createInflightTable() error {
 		consumer_id    TEXT    NOT NULL, -- 추가!
 		lease_until    TIMESTAMP NOT NULL,
 		delivery_count INTEGER NOT NULL DEFAULT 1,
+		receipt        TEXT,
 		last_error     TEXT,
 		claimed_at     TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 		PRIMARY KEY (group_name, q_id)
@@ -192,7 +198,15 @@ func (m *fileDBManager) createInflightTable() error {
 	}
 	createIndex := `CREATE INDEX IF NOT EXISTS idx_inflight_lease ON inflight(group_name, lease_until);`
 	_, err = m.db.Exec(createIndex)
-	return err
+	if err != nil {
+		return err
+	}
+	createIndex2 := `CREATE UNIQUE INDEX IF NOT EXISTS idx_inflight_receipt ON inflight(receipt);`
+	_, err = m.db.Exec(createIndex2)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 // create acked table
@@ -273,10 +287,11 @@ func (m *fileDBManager) ReadMessage(group, consumerID string, leaseSec int) (_ q
 
 	// 2) 선점 시도 (UPSERT). leaseSec는 정수(초)
 	res, err := tx.Exec(`
-        INSERT INTO inflight(q_id, group_name, consumer_id, lease_until, delivery_count, claimed_at)
+        INSERT INTO inflight(q_id, group_name, consumer_id, lease_until, delivery_count, claimed_at, receipt)
         SELECT ?, ?, ?, DATETIME('now', ? || ' seconds'),
                COALESCE((SELECT delivery_count FROM inflight WHERE group_name=? AND q_id=?),0)+1,
-               CURRENT_TIMESTAMP
+               CURRENT_TIMESTAMP,
+			   lower(hex(randomblob(16))) AS receipt
         WHERE NOT EXISTS (
             SELECT 1 FROM inflight
             WHERE group_name=? AND q_id=? AND lease_until > CURRENT_TIMESTAMP
@@ -285,7 +300,8 @@ func (m *fileDBManager) ReadMessage(group, consumerID string, leaseSec int) (_ q
           consumer_id    = excluded.consumer_id,
           lease_until    = excluded.lease_until,
           delivery_count = inflight.delivery_count + 1,
-          claimed_at     = CURRENT_TIMESTAMP
+          claimed_at     = CURRENT_TIMESTAMP,
+          receipt        = excluded.receipt
 		  WHERE inflight.lease_until <= CURRENT_TIMESTAMP
     `, candID, group, consumerID, leaseSec, group, candID, group, candID)
 	if err != nil {
@@ -301,13 +317,13 @@ func (m *fileDBManager) ReadMessage(group, consumerID string, leaseSec int) (_ q
 	// 3) 내가 점유한 메시지 반환 (consumer_id로 한정)
 	var msg queueMsg
 	err = tx.QueryRow(`
-        SELECT q.id, q.msg, q.insert_ts
+        SELECT q.id, q.msg, q.insert_ts, i.receipt
         FROM queue q
         JOIN inflight i ON i.q_id = q.id
         WHERE i.group_name = ? AND i.consumer_id = ?
         ORDER BY i.claimed_at DESC
         LIMIT 1
-    `, group, consumerID).Scan(&msg.Id, &msg.Msg, &msg.Insert_ts)
+    `, group, consumerID).Scan(&msg.Id, &msg.Msg, &msg.Insert_ts, &msg.Receipt)
 	if err != nil {
 		return queueMsg{}, err
 	}
@@ -315,7 +331,7 @@ func (m *fileDBManager) ReadMessage(group, consumerID string, leaseSec int) (_ q
 	return msg, nil
 }
 
-func (m *fileDBManager) AckMessage(group string, msgID int64) (err error) {
+func (m *fileDBManager) AckMessage(group string, msgID int64, receipt string) (err error) {
 	tx, err := m.db.Begin()
 	if err != nil {
 		return err
@@ -327,16 +343,17 @@ func (m *fileDBManager) AckMessage(group string, msgID int64) (err error) {
 			err = tx.Commit()
 		}
 	}()
-	if _, err = tx.Exec(`INSERT OR IGNORE INTO acked (q_id, group_name) VALUES (?, ?)`, msgID, group); err != nil {
+	if _, err = tx.Exec(`DELETE FROM inflight WHERE q_id = ? AND group_name = ? AND receipt = ?`, msgID, group, receipt); err != nil {
 		return err
 	}
-	if _, err = tx.Exec(`DELETE FROM inflight WHERE q_id = ? AND group_name = ?`, msgID, group); err != nil {
+
+	if _, err = tx.Exec(`INSERT OR IGNORE INTO acked (q_id, group_name) VALUES (?, ?)`, msgID, group); err != nil {
 		return err
 	}
 	return nil
 }
 
-func (m *fileDBManager) NackMessage(group string, msgID int64, backoff time.Duration, maxDeliveries int, reason string) (err error) {
+func (m *fileDBManager) NackMessage(group string, msgID int64, receipt string, backoff time.Duration, maxDeliveries int, reason string) (err error) {
 	tx, err := m.db.Begin()
 	if err != nil {
 		return err
@@ -348,8 +365,7 @@ func (m *fileDBManager) NackMessage(group string, msgID int64, backoff time.Dura
 			err = tx.Commit()
 		}
 	}()
-	backoffSecInt := int(backoff.Seconds()) // backoff를 초 단위 정수로 변환
-	// 지수적 backoff 증가
+
 	var retryCount int
 	if err = tx.QueryRow(
 		`SELECT delivery_count 
@@ -359,25 +375,37 @@ func (m *fileDBManager) NackMessage(group string, msgID int64, backoff time.Dura
 		return err
 	}
 
-	backoffSecInt = backoffSecInt * (1 << (retryCount - 1)) // 2^(retryCount-1) 배 증가
-	jitter := util.GenerateJitter(backoffSecInt)
-	backoffSecInt += jitter
-	backoffSecInt = max(1, min(backoffSecInt, 86400)) // 1초~24시간 클램프 예시
+	// 지수적 backoff 증가
+	backoffSec := int(backoff.Seconds())
+	if backoffSec < 1 {
+		backoffSec = 1
+	} // clamp
+	jitter := util.GenerateJitter(backoffSec)
+	backoffSec = backoffSec*(1<<(retryCount-1)) + jitter // 첫 호출 기준
+	if backoffSec > 86400 {
+		backoffSec = 86400
+	}
 
-	if _, err = tx.Exec(`
+	res, err := tx.Exec(`
         UPDATE inflight
         SET lease_until    = DATETIME('now', ? || ' seconds'),
             delivery_count = delivery_count + 1,
             last_error     = ?
-        WHERE group_name = ? AND q_id = ?
-    `, backoffSecInt, reason, group, msgID); err != nil {
+        WHERE group_name = ? AND q_id = ? AND receipt = ?
+    `, backoffSec, reason, group, msgID, receipt)
+	if err != nil {
 		return err
+	}
+
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return ErrContended
 	}
 
 	var dc int
 	if err = tx.QueryRow(`
-        SELECT delivery_count FROM inflight WHERE group_name = ? AND q_id = ?
-    `, group, msgID).Scan(&dc); err != nil {
+        SELECT delivery_count FROM inflight WHERE group_name = ? AND q_id = ? AND receipt = ?
+    `, group, msgID, receipt).Scan(&dc); err != nil {
 		return err
 	}
 	if dc > maxDeliveries {
@@ -389,10 +417,10 @@ func (m *fileDBManager) NackMessage(group string, msgID int64, backoff time.Dura
 			return err
 		}
 
-		if _, err = tx.Exec(`INSERT OR IGNORE INTO acked (q_id, group_name) VALUES (?, ?)`, msgID, group); err != nil {
+		if _, err = tx.Exec(`DELETE FROM inflight WHERE group_name = ? AND q_id = ? AND receipt = ?`, group, msgID, receipt); err != nil {
 			return err
 		}
-		if _, err = tx.Exec(`DELETE FROM inflight WHERE group_name = ? AND q_id = ?`, group, msgID); err != nil {
+		if _, err = tx.Exec(`INSERT OR IGNORE INTO acked (q_id, group_name) VALUES (?, ?)`, msgID, group); err != nil {
 			return err
 		}
 		fmt.Printf("Message %d exceeded max deliveries (%d). Moving to DLQ.\n", msgID, maxDeliveries)
@@ -429,4 +457,62 @@ func (m *fileDBManager) GetStatus() (internal.QueueStatus, error) {
 		return status, err
 	}
 	return status, nil
+}
+
+func (m *fileDBManager) PeekMessage(group string) (_ queueMsg, err error) {
+	tx, err := m.db.Begin()
+	if err != nil {
+		return queueMsg{}, err
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		} else {
+			err = tx.Commit()
+		}
+	}()
+
+	var msg queueMsg
+	// Implement the logic to peek a message from the queue
+	err = tx.QueryRow(`
+        SELECT q.id, q.msg, q.insert_ts, "" as receipt
+        FROM queue q
+        LEFT JOIN acked a   ON a.q_id = q.id AND a.group_name = ?
+        LEFT JOIN inflight i ON i.q_id = q.id AND i.group_name = ?
+        WHERE a.q_id IS NULL
+          AND (i.q_id IS NULL OR i.lease_until <= CURRENT_TIMESTAMP)
+        ORDER BY q.id ASC
+        LIMIT 1
+    `, group, group).Scan(&msg.Id, &msg.Msg, &msg.Insert_ts, &msg.Receipt)
+	if err == sql.ErrNoRows {
+		return queueMsg{}, ErrEmpty
+	}
+	if err != nil {
+		return queueMsg{}, err
+	}
+	return msg, nil
+}
+
+func (m *fileDBManager) RenewMessage(group string, msgID int64, receipt string, extendSec int) error {
+	if extendSec < 1 {
+		extendSec = 1
+	}
+	res, err := m.db.Exec(`
+		UPDATE inflight
+		SET lease_until = DATETIME('now', '+' || ? || ' seconds')
+		WHERE group_name = ? AND q_id = ? AND receipt = ?
+		AND lease_until > CURRENT_TIMESTAMP
+	`, extendSec, group, msgID, receipt)
+	if err != nil {
+		return err
+	}
+
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrLeaseExpired
+	}
+	return nil
 }

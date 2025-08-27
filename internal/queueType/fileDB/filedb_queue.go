@@ -2,6 +2,7 @@ package fileDB
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"go-msg-queue-mini/internal"
 	"sync"
@@ -63,53 +64,63 @@ func (q *fileDBQueue) Enqueue(group_name string, item interface{}) error {
 	return nil
 }
 
-func (q *fileDBQueue) Dequeue(consumer_group string, consumer_id string) (any, int64, error) {
+func (q *fileDBQueue) Dequeue(consumer_group string, consumer_id string) (internal.QueueMessage, error) {
 	unLock := q.Lock(consumer_group)
 	defer unLock()
+
+	queueMessage := internal.QueueMessage{
+		Payload: nil,
+		ID:      -1,
+		Receipt: "",
+	}
 
 	msg, err := q.manager.ReadMessage(consumer_group, consumer_id, 3)
 	if err != nil {
 		switch err {
 		case ErrEmpty:
-			return nil, -1, ErrEmpty
+			return queueMessage, ErrEmpty
 		case ErrContended:
-			return nil, -1, ErrContended
+			return queueMessage, ErrContended
 		default:
-			return nil, -1, fmt.Errorf("unexpected error: %w", err)
+			return queueMessage, fmt.Errorf("unexpected error: %w", err)
 		}
 	}
 
 	// 매니저가 아직 (queueMsg{}, nil)로 빈 큐를 표현한다면 방어
 	if msg.Id == 0 || len(msg.Msg) == 0 {
-		return nil, -1, ErrEmpty
+		return queueMessage, ErrEmpty
 	}
 
 	var item any
 	if err := json.Unmarshal(msg.Msg, &item); err != nil {
-		return nil, -1, err
+		return queueMessage, err
 	}
 	// if item empty
 	if item == nil {
-		return nil, -1, fmt.Errorf("no message available")
+		return queueMessage, fmt.Errorf("no message available")
 	}
-	return item, msg.Id, nil
+
+	queueMessage.Payload = item
+	queueMessage.ID = msg.Id
+	queueMessage.Receipt = msg.Receipt
+	return queueMessage, nil
 }
 
-func (q *fileDBQueue) Ack(consumer_group string, msg_id int64) error {
-	if err := q.manager.AckMessage(consumer_group, msg_id); err != nil {
+func (q *fileDBQueue) Ack(consumer_group string, msg_id int64, receipt string) error {
+	if err := q.manager.AckMessage(consumer_group, msg_id, receipt); err != nil {
 		fmt.Println("Error acknowledging message:", err)
 		return err
 	}
 	return nil
 }
 
-func (q *fileDBQueue) Nack(consumer_group string, msg_id int64) error {
+func (q *fileDBQueue) Nack(consumer_group string, msg_id int64, receipt string) error {
 	maxRetry := q.maxRetry
 	retryInterval, err := time.ParseDuration(q.retryInterval)
 	if err != nil {
 		return fmt.Errorf("invalid retry interval: %w", err)
 	}
-	if err := q.manager.NackMessage(consumer_group, msg_id, retryInterval, maxRetry, "Nack Message"); err != nil {
+	if err := q.manager.NackMessage(consumer_group, msg_id, receipt, retryInterval, maxRetry, "Nack Message"); err != nil {
 		fmt.Println("Error not acknowledging message:", err)
 		return err
 	}
@@ -126,4 +137,28 @@ func (q *fileDBQueue) Shutdown() error {
 
 func (q *fileDBQueue) Status() (internal.QueueStatus, error) {
 	return q.manager.GetStatus()
+}
+
+// bellow new api for http, gRPC
+func (q *fileDBQueue) Peek(group_name string) (internal.QueueMessage, error) {
+	msg, err := q.manager.PeekMessage(group_name)
+	if err != nil {
+		if errors.Is(err, ErrEmpty) {
+			return internal.QueueMessage{}, nil
+		}
+		return internal.QueueMessage{}, err
+	}
+	var item any
+	if err := json.Unmarshal(msg.Msg, &item); err != nil {
+		return internal.QueueMessage{}, err
+	}
+	return internal.QueueMessage{
+		Payload: item,
+		ID:      msg.Id,
+		Receipt: "",
+	}, nil
+}
+
+func (q *fileDBQueue) Renew(group_name string, messageID int64, receipt string, extendSec int) error {
+	return q.manager.RenewMessage(group_name, messageID, receipt, extendSec)
 }
