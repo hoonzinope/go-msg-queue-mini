@@ -44,13 +44,6 @@ func _consume(queue Queue, group_name, consumer_name string) {
 			fmt.Printf("group :  %s NACKing message %d, data: %v\n", group_name, messageID, message)
 			if err := queue.Nack(group_name, messageID, messageReceipt); err != nil {
 				fmt.Printf("Error NACKing message %d for %s: %v\n", messageID, group_name, err)
-			} else {
-				// renew message
-				if err := queue.Renew(group_name, messageID, messageReceipt, 30); err != nil {
-					fmt.Printf("Renewing message %d for %s: %v\n", messageID, group_name, err)
-				} else {
-					fmt.Printf("Successfully renewed message %d for %s\n", messageID, group_name)
-				}
 			}
 			time.Sleep(100 * time.Millisecond) // Sleep to avoid busy loop
 		} else {

@@ -160,9 +160,5 @@ func (q *fileDBQueue) Peek(group_name string) (internal.QueueMessage, error) {
 }
 
 func (q *fileDBQueue) Renew(group_name string, messageID int64, receipt string, extendSec int) error {
-	err := q.manager.RenewMessage(group_name, messageID, receipt, extendSec)
-	if err != nil {
-		return err
-	}
-	return nil
+	return q.manager.RenewMessage(group_name, messageID, receipt, extendSec)
 }

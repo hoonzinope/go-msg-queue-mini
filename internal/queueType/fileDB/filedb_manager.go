@@ -366,13 +366,22 @@ func (m *fileDBManager) NackMessage(group string, msgID int64, receipt string, b
 		}
 	}()
 
+	var retryCount int
+	if err = tx.QueryRow(
+		`SELECT delivery_count 
+		FROM inflight 
+		WHERE group_name = ? AND q_id = ?`,
+		group, msgID).Scan(&retryCount); err != nil {
+		return err
+	}
+
 	// 지수적 backoff 증가
 	backoffSec := int(backoff.Seconds())
 	if backoffSec < 1 {
 		backoffSec = 1
 	} // clamp
 	jitter := util.GenerateJitter(backoffSec)
-	backoffSec = backoffSec*(1<<0) + jitter // 첫 호출 기준
+	backoffSec = backoffSec*(1<<(retryCount-1)) + jitter // 첫 호출 기준
 	if backoffSec > 86400 {
 		backoffSec = 86400
 	}
@@ -494,9 +503,16 @@ func (m *fileDBManager) RenewMessage(group string, msgID int64, receipt string, 
 		WHERE group_name = ? AND q_id = ? AND receipt = ?
 		AND lease_until > CURRENT_TIMESTAMP
 	`, extendSec, group, msgID, receipt)
-	n, _ := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
 	if n == 0 {
 		return ErrLeaseExpired
 	}
-	return err
+	return nil
 }
