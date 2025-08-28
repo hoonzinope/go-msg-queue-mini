@@ -170,15 +170,6 @@ func (m *fileDBManager) initDB() error {
 
 // create queue table
 func (m *fileDBManager) createQueueTable() error {
-	var res int
-	err := m.db.QueryRow(`select 1 from queue;`).Scan(&res)
-	if err != nil {
-		return err
-	}
-	if res == 1 {
-		return nil
-	}
-
 	createTableSQL :=
 		`CREATE TABLE IF NOT EXISTS queue (
 		id INTEGER PRIMARY KEY,                          -- rowid 기반 고유 PK
@@ -187,12 +178,14 @@ func (m *fileDBManager) createQueueTable() error {
 		global_id TEXT NOT NULL DEFAULT '',			 -- 글로벌 ID (복제시 사용, UUID 사용)
     	insert_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 	);`
-	_, err = m.db.Exec(createTableSQL) 
-	if err != nil { return err }
-	createIndex := `CREATE UNIQUE INDEX uq_queue_global ON queue(global_id);`
+	_, err := m.db.Exec(createTableSQL)
+	if err != nil {
+		return err
+	}
+	createIndex := `CREATE UNIQUE INDEX IF NOT EXISTS uq_queue_global ON queue(global_id);`
 	_, err = m.db.Exec(createIndex)
 	if err != nil { return err }
-	createIndex2 := `CREATE INDEX idx_queue_partition ON queue(partition_id, id);`
+	createIndex2 := `CREATE INDEX IF NOT EXISTS idx_queue_partition ON queue(partition_id, id);`
 	_, err = m.db.Exec(createIndex2)
 	if err != nil { return err }
 	return nil
@@ -200,14 +193,6 @@ func (m *fileDBManager) createQueueTable() error {
 
 // create inflight table
 func (m *fileDBManager) createInflightTable() error {
-	var res int
-	err := m.db.QueryRow(`select 1 from inflight;`).Scan(&res)
-	if err != nil && err != sql.ErrNoRows {
-		return err
-	}
-	if res == 1 {
-		return nil
-	}
 	createTableSQL :=
 		`CREATE TABLE IF NOT EXISTS inflight (
 		q_id           INTEGER NOT NULL,
@@ -222,7 +207,7 @@ func (m *fileDBManager) createInflightTable() error {
 		global_id TEXT NOT NULL DEFAULT '',			 -- 글로벌 ID (복제시 사용, UUID 사용)
 		PRIMARY KEY (group_name, partition_id, q_id)
 	);`
-	_, err = m.db.Exec(createTableSQL)
+	_, err := m.db.Exec(createTableSQL)
 	if err != nil {
 		return err
 	}
@@ -241,14 +226,6 @@ func (m *fileDBManager) createInflightTable() error {
 
 // create acked table
 func (m *fileDBManager) createAckedTable() error {
-	var res int
-	err := m.db.QueryRow(`select 1 from acked;`).Scan(&res)
-	if err != nil && err != sql.ErrNoRows {
-		return err
-	}
-	if res == 1 {
-		return nil
-	}
 	createTableSQL :=
 		`CREATE TABLE IF NOT EXISTS acked (
 		group_name  TEXT NOT NULL,                       -- 컨슈머 그룹
@@ -257,20 +234,12 @@ func (m *fileDBManager) createAckedTable() error {
 		acked_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 		PRIMARY KEY (group_name, partition_id, global_id)                   -- 그룹별 메시지 1개만 점유 가능
 	);`
-	_, err = m.db.Exec(createTableSQL)
+	_, err := m.db.Exec(createTableSQL)
 	return err
 }
 
 // create dlq table
 func (m *fileDBManager) createDLQTable() error {
-	var res int
-	err := m.db.QueryRow(`select 1 from dlq;`).Scan(&res)
-	if err != nil && err != sql.ErrNoRows {
-		return err
-	}
-	if res == 1 {
-		return nil
-	}
 	createTableSQL :=
 		`CREATE TABLE IF NOT EXISTS dlq (
 		id INTEGER PRIMARY KEY,                          -- rowid 기반 PK
@@ -282,7 +251,7 @@ func (m *fileDBManager) createDLQTable() error {
     	reason TEXT,                                     -- 실패 사유
     	insert_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP -- 그룹별 메시지 1개만 점유 가능
 	);`
-	_, err = m.db.Exec(createTableSQL)
+	_, err := m.db.Exec(createTableSQL)
 	return err
 }
 
@@ -293,22 +262,19 @@ func (m *fileDBManager) WriteMessage(msg []byte) (err error) {
 }
 
 func (m *fileDBManager) WriteMessageWithMeta(msg []byte, globalID string, partitionID int) (err error) {
-
-	{
-		tx, err := m.db.Begin()
-		if err != nil {
-			return err
-		}
-		defer func() {
-			if err != nil {
-				_ = tx.Rollback()
-			} else {
-				err = tx.Commit()
-			}
-		}()
-		_, err = tx.Exec(`INSERT INTO queue (msg, global_id, partition_id) VALUES (?, ?, ?)`, msg, globalID, partitionID)
+	tx, err := m.db.Begin()
+	if err != nil {
 		return err
 	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		} else {
+			err = tx.Commit()
+		}
+	}()
+	_, err = tx.Exec(`INSERT INTO queue (msg, global_id, partition_id) VALUES (?, ?, ?)`, msg, globalID, partitionID)
+	return err
 }
 
 func (m *fileDBManager) ReadMessage(group, consumerID string, leaseSec int) (_ queueMsg, err error) {
