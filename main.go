@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"go-msg-queue-mini/internal"
 	"go-msg-queue-mini/internal/api/http"
 	fileDBQueue "go-msg-queue-mini/internal/core"
@@ -23,7 +24,7 @@ func main() {
 
 	config, err := internal.ReadConfig("config.yml")
 	if err != nil {
-		util.Error("Error reading config: %v", err)
+		util.Error(fmt.Sprintf("Error reading config: %v", err))
 		return
 	}
 	// Create a new queue
@@ -31,17 +32,17 @@ func main() {
 	case "", "memory":
 		queue, err = fileDBQueue.NewFileDBQueue(config)
 		if err != nil {
-			util.Error("Error initializing file DB queue: %v", err)
+			util.Error(fmt.Sprintf("Error initializing file DB queue: %v", err))
 			return
 		}
 	case "file":
 		queue, err = fileDBQueue.NewFileDBQueue(config)
 		if err != nil {
-			util.Error("Error initializing file queue: %v", err)
+			util.Error(fmt.Sprintf("Error initializing file queue: %v", err))
 			return
 		}
 	default:
-		util.Error("Unsupported persistence type: %s", config.Persistence.Type)
+		util.Error(fmt.Sprintf("Unsupported persistence type: %s", config.Persistence.Type))
 		return
 	}
 
@@ -85,7 +86,7 @@ func main() {
 		go func() {
 			defer wg.Done()
 			producer := runner.Producer{
-				Name:  "producer_1",
+				Name:  "producer_2",
 				Queue: queue,
 			}
 			producer.Produce(ctx)
@@ -106,7 +107,7 @@ func main() {
 				defer wg.Done()
 				err := http.StartServer(ctx, config, queue)
 				if err != nil {
-					util.Error("Error starting HTTP server: %v", err)
+					util.Error(fmt.Sprintf("Error starting HTTP server: %v", err))
 				}
 			}()
 		}

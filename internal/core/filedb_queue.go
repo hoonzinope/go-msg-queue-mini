@@ -22,7 +22,8 @@ type fileDBQueue struct {
 func NewFileDBQueue(config *internal.Config) (*fileDBQueue, error) {
 	dbpath := config.Persistence.Options.DirsPath + "/filedb_queue.db"
 	dbpath = fmt.Sprintf("file:%s?_txlock=immediate&_busy_timeout=5000&_journal=WAL&_sync=NORMAL", dbpath)
-	if config.Persistence.Type == "memory" {
+	queueType := config.Persistence.Type
+	if queueType == "memory" {
 		dbpath = ":memory:"
 	}
 
@@ -36,7 +37,7 @@ func NewFileDBQueue(config *internal.Config) (*fileDBQueue, error) {
 		return nil, fmt.Errorf("invalid lease duration: %w", err)
 	}
 
-	manager, err := NewFileDBManager(dbpath)
+	manager, err := NewFileDBManager(dbpath, queueType)
 	if err != nil {
 		return nil, err
 	}

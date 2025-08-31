@@ -65,9 +65,12 @@ func (c *Consumer) _consume() {
 			}
 		}
 		time.Sleep(100 * time.Millisecond) // Sleep to avoid busy loop
-	} else if messageID == -1 {
-		return // No messages available, just return
 	} else {
+		if errors.Is(err, core.ErrEmpty) || errors.Is(err, core.ErrContended) {
+			// util.Info(fmt.Sprintf("No messages available for %s", c.ConsumerName))
+			time.Sleep(500 * time.Millisecond) // Sleep to avoid busy loop
+			return
+		}
 		util.Error(fmt.Sprintf("Error dequeuing message for %s: %v", c.ConsumerName, err))
 		time.Sleep(500 * time.Millisecond) // Sleep to avoid busy loop
 	}

@@ -14,10 +14,11 @@ import (
 )
 
 type FileDBManager struct {
-	db       *sql.DB
-	stopChan chan struct{}
-	doneChan chan struct{}
-	stopSync sync.Once
+	db        *sql.DB
+	stopChan  chan struct{}
+	doneChan  chan struct{}
+	stopSync  sync.Once
+	queueType string
 }
 
 type queueMsg struct {
@@ -35,7 +36,7 @@ var (
 	ErrLeaseExpired = errors.New("lease expired")
 )
 
-func NewFileDBManager(dsn string) (*FileDBManager, error) {
+func NewFileDBManager(dsn string, queueType string) (*FileDBManager, error) {
 	db, err := sql.Open("sqlite3", dsn) // dsn: "file:/path/db.sqlite3"
 	if err != nil {
 		return nil, err
@@ -45,9 +46,10 @@ func NewFileDBManager(dsn string) (*FileDBManager, error) {
 		return nil, err
 	}
 	fm := &FileDBManager{
-		db:       db,
-		stopChan: make(chan struct{}),
-		doneChan: make(chan struct{}),
+		db:        db,
+		stopChan:  make(chan struct{}),
+		doneChan:  make(chan struct{}),
+		queueType: queueType,
 	}
 	if err := fm.initDB(); err != nil {
 		_ = db.Close()
@@ -484,7 +486,7 @@ func (m *FileDBManager) NackMessageWithMeta(group string, partitionID int, globa
 
 func (m *FileDBManager) GetStatus() (internal.QueueStatus, error) {
 	var status internal.QueueStatus = internal.QueueStatus{
-		QueueType:        "fileDB",
+		QueueType:        m.queueType,
 		TotalMessages:    0,
 		AckedMessages:    0,
 		InflightMessages: 0,

@@ -17,9 +17,9 @@ type DequeueRequest struct {
 }
 
 type DequeueMessage struct {
-	Payload interface{} `json:"Payload"`
-	Receipt string      `json:"Receipt"`
-	ID      int64       `json:"ID"`
+	Payload interface{} `json:"payload"`
+	Receipt string      `json:"receipt"`
+	ID      int64       `json:"id"`
 }
 
 type DequeueResponse struct {
@@ -40,10 +40,11 @@ type NackRequest struct {
 }
 
 type QueueStatus struct {
-	TotalMessages    int64 `json:"total_messages"`
-	AckedMessages    int64 `json:"acked_messages"`
-	InflightMessages int64 `json:"inflight_messages"`
-	DLQMessages      int64 `json:"dlq_messages"`
+	QueueType        string `json:"queue_type"`
+	TotalMessages    int64  `json:"total_messages"`
+	AckedMessages    int64  `json:"acked_messages"`
+	InflightMessages int64  `json:"inflight_messages"`
+	DLQMessages      int64  `json:"dlq_messages"`
 }
 type StatusResponse struct {
 	Status      string      `json:"status"`
