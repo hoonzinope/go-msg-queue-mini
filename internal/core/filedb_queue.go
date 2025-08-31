@@ -1,4 +1,4 @@
-package fileDB
+package core
 
 import (
 	"encoding/json"
@@ -10,11 +10,12 @@ import (
 )
 
 type fileDBQueue struct {
-	manager       *fileDBManager
+	manager       *FileDBManager
 	mu            sync.Mutex
 	groupLock     map[string]*sync.Mutex
 	maxRetry      int
-	retryInterval string
+	retryInterval time.Duration
+	leaseDuration time.Duration
 }
 
 func NewFileDBQueue(config *internal.Config) (*fileDBQueue, error) {
@@ -22,6 +23,16 @@ func NewFileDBQueue(config *internal.Config) (*fileDBQueue, error) {
 	dbpath = fmt.Sprintf("file:%s?_txlock=immediate&_busy_timeout=5000&_journal=WAL&_sync=NORMAL", dbpath)
 	if config.Persistence.Type == "memory" {
 		dbpath = ":memory:"
+	}
+
+	retryInterval, err := time.ParseDuration(config.RetryInterval)
+	if err != nil {
+		return nil, fmt.Errorf("invalid retry interval: %w", err)
+	}
+
+	leaseDuration, err := time.ParseDuration(config.LeaseDuration)
+	if err != nil {
+		return nil, fmt.Errorf("invalid lease duration: %w", err)
 	}
 
 	manager, err := NewFileDBManager(dbpath)
@@ -32,7 +43,8 @@ func NewFileDBQueue(config *internal.Config) (*fileDBQueue, error) {
 		manager:       manager,
 		groupLock:     map[string]*sync.Mutex{},
 		maxRetry:      config.MaxRetry,
-		retryInterval: config.RetryInterval,
+		retryInterval: retryInterval,
+		leaseDuration: leaseDuration,
 	}
 	return fq, nil
 }
@@ -73,8 +85,7 @@ func (q *fileDBQueue) Dequeue(consumer_group string, consumer_id string) (intern
 		ID:      -1,
 		Receipt: "",
 	}
-
-	msg, err := q.manager.ReadMessage(consumer_group, consumer_id, 3)
+	msg, err := q.manager.ReadMessage(consumer_group, consumer_id, int(q.leaseDuration.Seconds()))
 	if err != nil {
 		switch err {
 		case ErrEmpty:
@@ -116,10 +127,7 @@ func (q *fileDBQueue) Ack(consumer_group string, msg_id int64, receipt string) e
 
 func (q *fileDBQueue) Nack(consumer_group string, msg_id int64, receipt string) error {
 	maxRetry := q.maxRetry
-	retryInterval, err := time.ParseDuration(q.retryInterval)
-	if err != nil {
-		return fmt.Errorf("invalid retry interval: %w", err)
-	}
+	retryInterval := q.retryInterval
 	if err := q.manager.NackMessage(consumer_group, msg_id, receipt, retryInterval, maxRetry, "Nack Message"); err != nil {
 		fmt.Println("Error not acknowledging message:", err)
 		return err
