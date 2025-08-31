@@ -64,7 +64,7 @@ func (q *fileDBQueue) Lock(group string) func() {
 	}
 }
 
-func (q *fileDBQueue) Enqueue(group_name string, item interface{}) error {
+func (q *fileDBQueue) Enqueue(item interface{}) error {
 	msg, err := json.Marshal(item)
 	if err != nil {
 		return err
@@ -152,7 +152,7 @@ func (q *fileDBQueue) Peek(group_name string) (internal.QueueMessage, error) {
 	msg, err := q.manager.PeekMessage(group_name)
 	if err != nil {
 		if errors.Is(err, ErrEmpty) {
-			return internal.QueueMessage{}, nil
+			return internal.QueueMessage{}, err
 		}
 		return internal.QueueMessage{}, err
 	}

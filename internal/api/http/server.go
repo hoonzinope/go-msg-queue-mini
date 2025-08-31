@@ -42,7 +42,7 @@ func StartServer(ctx context.Context, config *internal.Config, queue internal.Qu
 	}()
 
 	err := server.ListenAndServe()
-	if err != nil {
+	if err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return fmt.Errorf("error starting server: %w", err)
 	}
 	return nil
@@ -77,7 +77,7 @@ func (h *httpServerInstance) enqueueHandler(c *gin.Context) {
 		return
 	}
 
-	err := h.Queue.Enqueue(req.Group, req.Message)
+	err := h.Queue.Enqueue(req.Message)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -175,11 +175,11 @@ func (h *httpServerInstance) peekHandler(c *gin.Context) {
 
 	message, err := h.Queue.Peek(req.Group)
 	if err != nil {
+		if errors.Is(err, core.ErrEmpty) {
+			c.Status(http.StatusNoContent)
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	if message.ID == 0 {
-		c.Status(http.StatusNoContent)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"status": "ok", "message": message})

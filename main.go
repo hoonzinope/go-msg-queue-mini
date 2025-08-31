@@ -82,7 +82,10 @@ func main() {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				http.StartServer(ctx, config, queue)
+				err := http.StartServer(ctx, config, queue)
+				if err != nil {
+					fmt.Printf("Error starting HTTP server: %v\n", err)
+				}
 			}()
 		}
 	}

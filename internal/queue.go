@@ -15,7 +15,7 @@ type QueueMessage struct {
 }
 
 type Queue interface {
-	Enqueue(group_name string, item interface{}) error
+	Enqueue(item interface{}) error
 	Dequeue(group_name string, consumer_id string) (QueueMessage, error)
 	Ack(group_name string, messageID int64, receipt string) error
 	Nack(group_name string, messageID int64, receipt string) error

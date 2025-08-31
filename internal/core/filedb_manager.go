@@ -21,9 +21,9 @@ type FileDBManager struct {
 }
 
 type queueMsg struct {
-	Id          int64
+	ID          int64
 	Msg         []byte
-	Insert_ts   time.Time
+	InsertTS    time.Time
 	Receipt     string
 	GlobalID    string // 복제시 큐메세지 식별용
 	PartitionID int    // 복제시 파티션 식별용
@@ -357,7 +357,7 @@ func (m *FileDBManager) ReadMessageWithMeta(group string, partitionID int, consu
 		WHERE i.group_name = ? AND i.consumer_id = ? AND i.partition_id = ?
 		ORDER BY i.claimed_at DESC
 		LIMIT 1
-	`, group, consumerID, partitionID).Scan(&msg.Id, &msg.Msg, &msg.Insert_ts, &msg.Receipt, &msg.GlobalID, &msg.PartitionID)
+	`, group, consumerID, partitionID).Scan(&msg.ID, &msg.Msg, &msg.InsertTS, &msg.Receipt, &msg.GlobalID, &msg.PartitionID)
 	if err != nil {
 		return queueMsg{}, err
 	}
@@ -543,7 +543,7 @@ func (m *FileDBManager) PeekMessageWithMeta(group string, partitionID int) (_ qu
 		  AND q.partition_id = ?
 		ORDER BY q.id ASC
 		LIMIT 1
-	`, group, partitionID, group, partitionID, partitionID).Scan(&msg.Id, &msg.Msg, &msg.Insert_ts, &msg.Receipt, &msg.GlobalID, &msg.PartitionID)
+	`, group, partitionID, group, partitionID, partitionID).Scan(&msg.ID, &msg.Msg, &msg.InsertTS, &msg.Receipt, &msg.GlobalID, &msg.PartitionID)
 	if err == sql.ErrNoRows {
 		return queueMsg{}, ErrEmpty
 	}
