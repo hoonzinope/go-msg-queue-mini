@@ -2,62 +2,126 @@
 
 [English](./README.en.md)
 
-Go 언어로 작성된 간단한 메시지 큐 시스템입니다. 생산자-소비자(Producer-Consumer) 패턴을 기반으로 하며, **SQLite**를 사용하여 메시지의 영속성을 보장합니다.
+간단하지만 견고한 Go 기반 메시지 큐입니다. Producer/Consumer 실행과 HTTP API를 모두 지원하며, SQLite 기반 영속성과 Ack/Nack, DLQ, 리스(lease) 연장 등 기본기를 갖춘 소형 큐 엔진입니다.
 
 ## 주요 특징
 
--   **SQLite 기반 영속성**: 메시지를 로컬 SQLite 데이터베이스에 저장하여 애플리케이션이 재시작되어도 데이터가 유실되지 않습니다.
--   **동시성 처리**: 여러 생산자와 소비자가 고루틴(Goroutine)을 통해 동시에 실행되어 메시지를 효율적으로 처리합니다.
--   **상태 모니터링**: 주기적으로 큐의 상태(전체, 처리 중, 확인된, DLQ 메시지 수 등)를 모니터링하고 로그를 출력합니다.
--   **안전한 종료**: `context`와 `sync.WaitGroup`을 사용하여 모든 고루틴이 안전하게 종료되도록 보장합니다.
--   **메시지 처리 보장**: `inflight` 큐, `Ack/Nack` 메커니즘, Dead-Letter Queue(DLQ)를 통해 메시지 처리를 보장합니다.
+- **영속성 선택**: `memory`(in-memory SQLite) 또는 `file`(파일 기반 SQLite)
+- **동시성 처리**: 다수 Producer/Consumer를 고루틴으로 병렬 실행
+- **처리 보장**: Ack/Nack, Inflight, DLQ, 재시도(backoff + jitter)
+- **리스/갱신**: 메시지 점유 기간(lease)과 `/renew`를 통한 연장
+- **미리보기/피킹**: 할당 없이 확인하는 `/peek`
+- **상태 확인**: 합계/ACK/Inflight/DLQ를 반환하는 `/status`
+- **운영 모드**: `debug` 모드(내장 프로듀서/컨슈머 + 모니터) 또는 HTTP API 서버
 
 ## 프로젝트 구조
 
 ```
-/Users/hoonzi/go-proj/go-msg-qu-mini/
-├───main.go                # 애플리케이션 진입점
-├───config.yml             # 큐 설정 파일
-├───go.mod                 # Go 모듈 및 의존성 관리
-├───internal/              # 내부 로직 패키지
-│   ├───queue.go           # Queue 인터페이스 정의
-│   ├───producer.go        # 메시지 생산자 로직
-│   ├───consumer.go        # 메시지 소비자 로직
-│   ├───config.go          # 설정 파일 파싱 로직
-│   ├───stat.go            # 큐 상태 모니터링 로직
-│   └───queueType/         # 큐 타입 구현
-│       └───fileDB/          # SQLite 기반 큐 구현
-│           ├───filedb_queue.go    # fileDB 큐 로직
-│           └───filedb_manager.go  # SQLite DB 관리 및 쿼리
-└───util/                  # 유틸리티 함수
-    └───randomStr.go       # 랜덤 문자열 생성
+.
+├── main.go                      # 엔트리포인트: debug/HTTP 모드 선택
+├── config.yml                   # 런타임 및 영속성 설정
+├── go.mod / go.sum
+├── README.md / README.en.md
+├── internal/
+│   ├── queue.go                 # 큐 인터페이스 및 상태 타입
+│   ├── config.go                # YAML 설정 로더
+│   ├── config_test.go           # 설정 로더 테스트
+│   ├── api/http/
+│   │   ├── server.go            # Gin HTTP 서버 부트스트랩
+│   │   ├── handler.go           # API 핸들러 (enqueue/dequeue/ack/nack/peek/renew/status/health)
+│   │   └── dto.go               # 요청/응답 DTO
+│   ├── core/
+│   │   ├── filedb_queue.go      # 큐 어댑터 (Queue 구현)
+│   │   └── filedb_manager.go    # SQLite 엔진 (Ack/Nack, DLQ, 리스, 정리 작업)
+│   └── runner/
+│       ├── producer.go          # 디버그 모드용 프로듀서
+│       ├── consumer.go          # 디버그 모드용 컨슈머
+│       └── stat.go              # 주기 상태 모니터
+└── util/
+    ├── randUtil.go              # 랜덤 메시지/수, 지터
+    ├── uuid.go                  # 글로벌 ID 생성
+    └── logger.go                # 간단 로거
 ```
 
-## 실행 방법
+## 빌드/실행/개발
 
-1.  **저장소 복제:**
-    ```bash
-    git clone https://github.com/your-username/go-msg-queue-mini.git
-    cd go-msg-queue-mini
-    ```
+- 실행: `go run main.go`
+- 빌드: `go build -o bin/go-msg-queue-mini ./...`
+- 테스트: `go test ./... -v` (커버리지: `-cover`)
+- 포맷/린트: `go fmt ./...` / `go vet ./...` / `go mod tidy`
 
-2.  **의존성 설치:**
-    ```bash
-    go mod tidy
-    ```
+## 설정 (`config.yml`)
 
-3.  **설정 (선택 사항):**
-    `config.yml` 파일을 열어 데이터베이스 파일 경로(`persistence.options.dirs-path`) 등 필요한 설정을 수정합니다.
+```yaml
+persistence:
+  # memory: 메모리 내 SQLite (디스크 쓰기 없음)
+  # file:   파일 기반 SQLite (권장: 로컬 개발/테스트)
+  type: file
+  options:
+    dirs-path: ./data/persistence
 
-4.  **애플리케이션 실행:**
-    ```bash
-    go run main.go
-    ```
+max-retry: 3           # 최대 재시도 횟수
+retry-interval: 30s    # 재시도 간격(백오프 베이스)
+lease-duration: 3s     # 메시지 리스 기간
+debug: false           # true면 내장 프로듀서/컨슈머/모니터 실행
 
-애플리케이션이 시작되면 콘솔에서 메시지 생산/소비 및 큐 상태 로그를 확인할 수 있습니다. `Ctrl+C`를 눌러 애플리케이션을 안전하게 종료할 수 있습니다.
+http:
+  enabled: true        # HTTP API 활성화
+  port: 8080           # 포트 (기본 8080)
+```
 
-## 주요 개념
+- `file` 모드 사용 시 디렉터리 생성: `mkdir -p ./data/persistence`
+- 실제 DB 파일 경로: `./data/persistence/filedb_queue.db`
 
--   **생산자-소비자 패턴**: 하나 이상의 생산자가 데이터를 생성하고 하나 이상의 소비자가 데이터를 처리하는 고전적인 동시성 패턴입니다.
--   **고루틴**: 생산자와 소비자는 고루틴으로 동시에 실행되어 높은 처리량을 달성합니다.
--   **SQLite 영속성**: 메시지는 SQLite 데이터베이스의 `queue` 테이블에 저장됩니다. 소비자가 메시지를 가져가면 `inflight` 테이블로 이동하여 처리 상태를 추적합니다. 처리가 완료되면 `acked` 테이블로, 실패하면 `dlq` 테이블로 이동합니다.
+## 모드
+
+- `debug: true`
+  - 내부 프로듀서 2개/컨슈머 2개와 상태 모니터가 함께 실행됩니다.
+  - 콘솔에서 생산/소비/상태 로그를 관찰할 수 있습니다.
+
+- `debug: false` + `http.enabled: true`
+  - HTTP API 서버가 `:8080` (또는 설정 포트)에서 기동됩니다.
+
+## HTTP API
+
+- 헬스체크: `GET /api/v1/health`
+  - 예) `curl -s localhost:8080/api/v1/health`
+
+- Enqueue: `POST /api/v1/enqueue`
+  - 요청: `{ "message": <任意 JSON> }`
+  - 예) `curl -X POST localhost:8080/api/v1/enqueue -H 'Content-Type: application/json' -d '{"message": {"text":"hello"}}'`
+
+- Dequeue: `POST /api/v1/dequeue`
+  - 요청: `{ "group": "g1", "consumer_id": "c-1" }`
+  - 응답: `{ status, message: { id, receipt, payload } }`
+
+- Ack: `POST /api/v1/ack`
+  - 요청: `{ "group": "g1", "message_id": 1, "receipt": "..." }`
+
+- Nack: `POST /api/v1/nack`
+  - 요청: `{ "group": "g1", "message_id": 1, "receipt": "..." }`
+  - 내부적으로 백오프 + 지터가 적용되며, `max-retry` 초과 시 DLQ로 이동
+
+- Peek: `POST /api/v1/peek`
+  - 요청: `{ "group": "g1" }` (할당/리스 없이 가장 앞 메시지 확인)
+
+- Renew: `POST /api/v1/renew`
+  - 요청: `{ "group": "g1", "message_id": 1, "receipt": "...", "extend_sec": 5 }`
+  - 현재 리스가 유효한 경우만 연장, 만료 시 409 반환
+
+- Status: `GET /api/v1/status`
+  - 응답: `{ queue_status: { queue_type, total_messages, acked_messages, inflight_messages, dlq_messages } }`
+
+## 테스트
+
+- 표준 `testing` 프레임워크 사용: `go test ./... -v`
+- 설정 로더 테스트: `internal/config_test.go`
+- 필요 시 `-cover`로 커버리지 확인
+
+## 보안/운영 팁
+
+- 비밀정보는 커밋하지 마세요. `config.yml`은 로컬 개발용입니다.
+- `file` 모드 사용 시 `persistence.options.dirs-path`가 존재하고 쓰기 가능해야 합니다.
+- `memory` 모드는 디스크에 기록하지 않으므로 프로세스 재시작 시 데이터가 사라집니다.
+
+---

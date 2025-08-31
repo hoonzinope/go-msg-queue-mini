@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"go-msg-queue-mini/internal"
+	"go-msg-queue-mini/util"
 	"sync"
 	"time"
 )
@@ -21,7 +22,8 @@ type fileDBQueue struct {
 func NewFileDBQueue(config *internal.Config) (*fileDBQueue, error) {
 	dbpath := config.Persistence.Options.DirsPath + "/filedb_queue.db"
 	dbpath = fmt.Sprintf("file:%s?_txlock=immediate&_busy_timeout=5000&_journal=WAL&_sync=NORMAL", dbpath)
-	if config.Persistence.Type == "memory" {
+	queueType := config.Persistence.Type
+	if queueType == "memory" {
 		dbpath = ":memory:"
 	}
 
@@ -35,7 +37,7 @@ func NewFileDBQueue(config *internal.Config) (*fileDBQueue, error) {
 		return nil, fmt.Errorf("invalid lease duration: %w", err)
 	}
 
-	manager, err := NewFileDBManager(dbpath)
+	manager, err := NewFileDBManager(dbpath, queueType)
 	if err != nil {
 		return nil, err
 	}
@@ -119,7 +121,7 @@ func (q *fileDBQueue) Dequeue(consumer_group string, consumer_id string) (intern
 
 func (q *fileDBQueue) Ack(consumer_group string, msg_id int64, receipt string) error {
 	if err := q.manager.AckMessage(consumer_group, msg_id, receipt); err != nil {
-		fmt.Println("Error acknowledging message:", err)
+		util.Error(fmt.Sprintf("Error acknowledging message: %v", err))
 		return err
 	}
 	return nil
@@ -129,7 +131,7 @@ func (q *fileDBQueue) Nack(consumer_group string, msg_id int64, receipt string) 
 	maxRetry := q.maxRetry
 	retryInterval := q.retryInterval
 	if err := q.manager.NackMessage(consumer_group, msg_id, receipt, retryInterval, maxRetry, "Nack Message"); err != nil {
-		fmt.Println("Error not acknowledging message:", err)
+		util.Error(fmt.Sprintf("Error not acknowledging message: %v", err))
 		return err
 	}
 	return nil
@@ -137,7 +139,7 @@ func (q *fileDBQueue) Nack(consumer_group string, msg_id int64, receipt string) 
 
 func (q *fileDBQueue) Shutdown() error {
 	if err := q.manager.Close(); err != nil {
-		fmt.Println("Error shutting down queue:", err)
+		util.Error(fmt.Sprintf("Error shutting down queue: %v", err))
 		return err
 	}
 	return nil

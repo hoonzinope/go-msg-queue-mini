@@ -1,9 +1,9 @@
 persistence:
-  type: file # memory, file, redis, etc.
-  options:
-    dirs-path: ./data/persistence
+  # type: file # memory, file, redis, etc.
+  # options:
+  #   dirs-path: ./data/persistence
     
-  # type : memory # Use in-memory persistence for simplicity
+  type : memory # Use in-memory persistence for simplicity
 
 max-retry: 3 # Maximum number of retries for message processing
 retry-interval: 30s # Interval between retries
