@@ -2,10 +2,11 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"go-msg-queue-mini/internal"
 	"go-msg-queue-mini/internal/api/http"
 	fileDBQueue "go-msg-queue-mini/internal/core"
+	runner "go-msg-queue-mini/internal/runner"
+	"go-msg-queue-mini/util"
 	"os"
 	"os/signal"
 	"sync"
@@ -16,13 +17,13 @@ var ctx, cancel = context.WithCancel(context.Background())
 var queue internal.Queue
 
 func main() {
-	fmt.Println("Starting message queue...")
+	util.Info("Starting message queue...")
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
 	config, err := internal.ReadConfig("config.yml")
 	if err != nil {
-		fmt.Printf("Error reading config: %v\n", err)
+		util.Error("Error reading config: %v", err)
 		return
 	}
 	// Create a new queue
@@ -30,52 +31,73 @@ func main() {
 	case "", "memory":
 		queue, err = fileDBQueue.NewFileDBQueue(config)
 		if err != nil {
-			fmt.Printf("Error initializing file DB queue: %v\n", err)
+			util.Error("Error initializing file DB queue: %v", err)
 			return
 		}
 	case "file":
 		queue, err = fileDBQueue.NewFileDBQueue(config)
 		if err != nil {
-			fmt.Printf("Error initializing file queue: %v\n", err)
+			util.Error("Error initializing file queue: %v", err)
 			return
 		}
 	default:
-		fmt.Printf("Unsupported persistence type: %s\n", config.Persistence.Type)
+		util.Error("Unsupported persistence type: %s", config.Persistence.Type)
 		return
 	}
 
 	var group_name string = "default"
 	wg := sync.WaitGroup{}
 	if config.Debug {
-		fmt.Println("Debug mode is enabled")
+		util.Info("Debug mode is enabled")
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			internal.Consume(ctx, queue, group_name, "consumer_1") // Start consuming messages
+			consumer := runner.Consumer{
+				Queue:        queue,
+				GroupName:    group_name,
+				ConsumerName: "consumer_1",
+			}
+			consumer.Consume(ctx)
 		}()
 
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			internal.Consume(ctx, queue, group_name, "consumer_2") // Start consuming messages
+			consumer := runner.Consumer{
+				Queue:        queue,
+				GroupName:    group_name,
+				ConsumerName: "consumer_2",
+			}
+			consumer.Consume(ctx)
 		}()
 
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			internal.Produce(ctx, queue, group_name) // Start producing messages
+			producer := runner.Producer{
+				Name:  "producer_1",
+				Queue: queue,
+			}
+			producer.Produce(ctx)
 		}()
 
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			internal.Produce(ctx, queue, group_name) // Start producing messages
+			producer := runner.Producer{
+				Name:  "producer_1",
+				Queue: queue,
+			}
+			producer.Produce(ctx)
 		}()
 
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			internal.MonitoringStatus(ctx, queue) // Start monitoring the queue status
+			statMonitor := runner.StatMonitor{
+				Queue: queue,
+			}
+			statMonitor.MonitoringStatus(ctx) // Start monitoring the queue status
 		}()
 	} else {
 		if config.HTTP.Enabled {
@@ -84,18 +106,18 @@ func main() {
 				defer wg.Done()
 				err := http.StartServer(ctx, config, queue)
 				if err != nil {
-					fmt.Printf("Error starting HTTP server: %v\n", err)
+					util.Error("Error starting HTTP server: %v", err)
 				}
 			}()
 		}
 	}
 
-	fmt.Println("Message queue is running. Press Ctrl+C to stop.")
+	util.Info("Message queue is running. Press Ctrl+C to stop.")
 
 	<-quit
-	fmt.Println("Stopping message queue...")
+	util.Info("Shutting down...")
 	cancel()  // Cancel the context to stop all goroutines
 	wg.Wait() // Wait for all goroutines to finish
 	queue.Shutdown()
-	fmt.Println("Message queue stopped.")
+	util.Info("Message queue stopped.")
 }

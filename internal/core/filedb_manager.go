@@ -71,15 +71,15 @@ func (m *FileDBManager) intervalJob() error {
 			// fmt.Println("@@@ Running periodic cleanup tasks...")
 			// 1. acked 테이블에서 오래된 항목 삭제
 			if err := m.deleteAckedMsg(); err != nil {
-				fmt.Println("Error deleting acked messages:", err)
+				util.Error(fmt.Sprintf("Error deleting acked messages: %v", err))
 			}
 			// 2. queue 테이블에서 오래된 항목 삭제
 			if err := m.deleteQueueMsg(); err != nil {
-				fmt.Println("Error deleting queue messages:", err)
+				util.Error(fmt.Sprintf("Error deleting queue messages: %v", err))
 			}
 			// 3. vacuum
 			if err := m.vacuum(); err != nil {
-				fmt.Println("Error during vacuum:", err)
+				util.Error(fmt.Sprintf("Error during vacuum: %v", err))
 			}
 		case <-m.stopChan:
 			// fmt.Println("@@@ Stopping periodic cleanup tasks...")
@@ -134,7 +134,7 @@ func (m *FileDBManager) deleteAckedMsg() error {
 
 func (m *FileDBManager) vacuum() error {
 	if _, err := m.db.Exec(`PRAGMA incremental_vacuum(1);`); err != nil {
-		fmt.Println("Error during vacuum:", err)
+		util.Error(fmt.Sprintf("Error during vacuum: %v", err))
 		return err
 	}
 	return nil
@@ -147,7 +147,7 @@ func (m *FileDBManager) Close() error {
 	select {
 	case <-m.doneChan:
 	case <-time.After(3 * time.Second):
-		fmt.Println("Timeout waiting for interval job to stop")
+		util.Error("Timeout waiting for interval job to stop")
 	}
 	return m.db.Close()
 }

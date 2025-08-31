@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"go-msg-queue-mini/internal"
 	"go-msg-queue-mini/internal/core"
+	"go-msg-queue-mini/util"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -37,7 +38,7 @@ func StartServer(ctx context.Context, config *internal.Config, queue internal.Qu
 		<-ctx.Done()
 		err := server.Shutdown(context.Background())
 		if err != nil {
-			fmt.Println("Error shutting down server:", err)
+			util.Error(fmt.Sprintf("Error shutting down server: %v", err))
 		}
 	}()
 
