@@ -91,8 +91,8 @@ func main() {
 
 	<-quit
 	fmt.Println("Stopping message queue...")
-	queue.Shutdown()
 	cancel()  // Cancel the context to stop all goroutines
 	wg.Wait() // Wait for all goroutines to finish
+	queue.Shutdown()
 	fmt.Println("Message queue stopped.")
 }
