@@ -98,7 +98,7 @@ func (q *fileDBQueue) Dequeue(consumer_group string, consumer_id string) (intern
 	}
 
 	// 매니저가 아직 (queueMsg{}, nil)로 빈 큐를 표현한다면 방어
-	if msg.Id == 0 || len(msg.Msg) == 0 {
+	if msg.ID == 0 || len(msg.Msg) == 0 {
 		return queueMessage, ErrEmpty
 	}
 
@@ -112,7 +112,7 @@ func (q *fileDBQueue) Dequeue(consumer_group string, consumer_id string) (intern
 	}
 
 	queueMessage.Payload = item
-	queueMessage.ID = msg.Id
+	queueMessage.ID = msg.ID
 	queueMessage.Receipt = msg.Receipt
 	return queueMessage, nil
 }
@@ -162,7 +162,7 @@ func (q *fileDBQueue) Peek(group_name string) (internal.QueueMessage, error) {
 	}
 	return internal.QueueMessage{
 		Payload: item,
-		ID:      msg.Id,
+		ID:      msg.ID,
 		Receipt: "",
 	}, nil
 }
