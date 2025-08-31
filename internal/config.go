@@ -16,6 +16,13 @@ type Config struct {
 	} `yaml:"persistence"`
 	MaxRetry      int    `yaml:"max-retry"`      // Maximum number of retries for message processing
 	RetryInterval string `yaml:"retry-interval"` // Interval between retries
+	LeaseDuration string `yaml:"lease-duration"` // Duration for message lease
+	Debug         bool   `yaml:"debug"`          // Enable debug mode
+
+	HTTP struct {
+		Enabled bool `yaml:"enabled"`
+		Port    int  `yaml:"port"`
+	} `yaml:"http"`
 }
 
 func ReadConfig(filePath string) (*Config, error) {

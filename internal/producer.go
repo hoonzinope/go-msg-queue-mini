@@ -22,6 +22,6 @@ func Produce(ctx context.Context, queue Queue, name string) {
 }
 
 func _produce(item interface{}, queue Queue, name string) {
-	queue.Enqueue(name, item)                               // Enqueue the item
+	queue.Enqueue(item)                                     // Enqueue the item
 	fmt.Printf("Produced by %s: %s\n", name, item.(string)) // Log the produced item
 }

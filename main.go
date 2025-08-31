@@ -4,7 +4,8 @@ import (
 	"context"
 	"fmt"
 	"go-msg-queue-mini/internal"
-	fileDBQueue "go-msg-queue-mini/internal/queueType/fileDB"
+	"go-msg-queue-mini/internal/api/http"
+	fileDBQueue "go-msg-queue-mini/internal/core"
 	"os"
 	"os/signal"
 	"sync"
@@ -45,41 +46,49 @@ func main() {
 
 	var group_name string = "default"
 	wg := sync.WaitGroup{}
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		internal.Consume(ctx, queue, group_name, "consumer_1") // Start consuming messages
-	}()
+	if config.Debug {
+		fmt.Println("Debug mode is enabled")
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			internal.Consume(ctx, queue, group_name, "consumer_1") // Start consuming messages
+		}()
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		internal.Consume(ctx, queue, group_name, "consumer_2") // Start consuming messages
-	}()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			internal.Consume(ctx, queue, group_name, "consumer_2") // Start consuming messages
+		}()
 
-	// wg.Add(1)
-	// go func() {
-	// 	defer wg.Done()
-	// 	internal.Consume(ctx, queue, "log", "consumer_1") // Start consuming messages
-	// }()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			internal.Produce(ctx, queue, group_name) // Start producing messages
+		}()
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		internal.Produce(ctx, queue, group_name) // Start producing messages
-	}()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			internal.Produce(ctx, queue, group_name) // Start producing messages
+		}()
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		internal.Produce(ctx, queue, group_name) // Start producing messages
-	}()
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		internal.MonitoringStatus(ctx, queue) // Start monitoring the queue status
-	}()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			internal.MonitoringStatus(ctx, queue) // Start monitoring the queue status
+		}()
+	} else {
+		if config.HTTP.Enabled {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				err := http.StartServer(ctx, config, queue)
+				if err != nil {
+					fmt.Printf("Error starting HTTP server: %v\n", err)
+				}
+			}()
+		}
+	}
 
 	fmt.Println("Message queue is running. Press Ctrl+C to stop.")
 
@@ -87,5 +96,6 @@ func main() {
 	fmt.Println("Stopping message queue...")
 	cancel()  // Cancel the context to stop all goroutines
 	wg.Wait() // Wait for all goroutines to finish
+	queue.Shutdown()
 	fmt.Println("Message queue stopped.")
 }

@@ -1,4 +1,4 @@
-package fileDB
+package core
 
 import (
 	"database/sql"
@@ -13,7 +13,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-type fileDBManager struct {
+type FileDBManager struct {
 	db       *sql.DB
 	stopChan chan struct{}
 	doneChan chan struct{}
@@ -21,11 +21,11 @@ type fileDBManager struct {
 }
 
 type queueMsg struct {
-	Id        int64
-	Msg       []byte
-	Insert_ts time.Time
-	Receipt   string
-	GlobalID  string // 복제시 큐메세지 식별용
+	ID          int64
+	Msg         []byte
+	InsertTS    time.Time
+	Receipt     string
+	GlobalID    string // 복제시 큐메세지 식별용
 	PartitionID int    // 복제시 파티션 식별용
 }
 
@@ -35,7 +35,7 @@ var (
 	ErrLeaseExpired = errors.New("lease expired")
 )
 
-func NewFileDBManager(dsn string) (*fileDBManager, error) {
+func NewFileDBManager(dsn string) (*FileDBManager, error) {
 	db, err := sql.Open("sqlite3", dsn) // dsn: "file:/path/db.sqlite3"
 	if err != nil {
 		return nil, err
@@ -44,7 +44,7 @@ func NewFileDBManager(dsn string) (*fileDBManager, error) {
 	if _, err := db.Exec(`PRAGMA auto_vacuum=INCREMENTAL; VACUUM;`); err != nil {
 		return nil, err
 	}
-	fm := &fileDBManager{
+	fm := &FileDBManager{
 		db:       db,
 		stopChan: make(chan struct{}),
 		doneChan: make(chan struct{}),
@@ -59,7 +59,7 @@ func NewFileDBManager(dsn string) (*fileDBManager, error) {
 	return fm, nil
 }
 
-func (m *fileDBManager) intervalJob() error {
+func (m *FileDBManager) intervalJob() error {
 	timer := time.NewTicker(time.Second * 5) // 5s
 	defer func() {
 		timer.Stop()
@@ -68,7 +68,7 @@ func (m *fileDBManager) intervalJob() error {
 	for {
 		select {
 		case <-timer.C:
-			fmt.Println("@@@ Running periodic cleanup tasks...")
+			// fmt.Println("@@@ Running periodic cleanup tasks...")
 			// 1. acked 테이블에서 오래된 항목 삭제
 			if err := m.deleteAckedMsg(); err != nil {
 				fmt.Println("Error deleting acked messages:", err)
@@ -82,13 +82,13 @@ func (m *fileDBManager) intervalJob() error {
 				fmt.Println("Error during vacuum:", err)
 			}
 		case <-m.stopChan:
-			fmt.Println("@@@ Stopping periodic cleanup tasks...")
+			// fmt.Println("@@@ Stopping periodic cleanup tasks...")
 			return nil
 		}
 	}
 }
 
-func (m *fileDBManager) deleteQueueMsg() error {
+func (m *FileDBManager) deleteQueueMsg() error {
 	tx, err := m.db.Begin()
 	if err != nil {
 		return err
@@ -113,7 +113,7 @@ func (m *fileDBManager) deleteQueueMsg() error {
 	return err
 }
 
-func (m *fileDBManager) deleteAckedMsg() error {
+func (m *FileDBManager) deleteAckedMsg() error {
 	tx, err := m.db.Begin()
 	if err != nil {
 		return err
@@ -132,7 +132,7 @@ func (m *fileDBManager) deleteAckedMsg() error {
 	return nil
 }
 
-func (m *fileDBManager) vacuum() error {
+func (m *FileDBManager) vacuum() error {
 	if _, err := m.db.Exec(`PRAGMA incremental_vacuum(1);`); err != nil {
 		fmt.Println("Error during vacuum:", err)
 		return err
@@ -140,7 +140,7 @@ func (m *fileDBManager) vacuum() error {
 	return nil
 }
 
-func (m *fileDBManager) Close() error {
+func (m *FileDBManager) Close() error {
 	m.stopSync.Do(func() {
 		close(m.stopChan)
 	})
@@ -152,7 +152,7 @@ func (m *fileDBManager) Close() error {
 	return m.db.Close()
 }
 
-func (m *fileDBManager) initDB() error {
+func (m *FileDBManager) initDB() error {
 	if err := m.createQueueTable(); err != nil {
 		return err
 	}
@@ -169,7 +169,7 @@ func (m *fileDBManager) initDB() error {
 }
 
 // create queue table
-func (m *fileDBManager) createQueueTable() error {
+func (m *FileDBManager) createQueueTable() error {
 	createTableSQL :=
 		`CREATE TABLE IF NOT EXISTS queue (
 		id INTEGER PRIMARY KEY,                          -- rowid 기반 고유 PK
@@ -184,15 +184,19 @@ func (m *fileDBManager) createQueueTable() error {
 	}
 	createIndex := `CREATE UNIQUE INDEX IF NOT EXISTS uq_queue_global ON queue(global_id);`
 	_, err = m.db.Exec(createIndex)
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	createIndex2 := `CREATE INDEX IF NOT EXISTS idx_queue_partition ON queue(partition_id, id);`
 	_, err = m.db.Exec(createIndex2)
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	return nil
 }
 
 // create inflight table
-func (m *fileDBManager) createInflightTable() error {
+func (m *FileDBManager) createInflightTable() error {
 	createTableSQL :=
 		`CREATE TABLE IF NOT EXISTS inflight (
 		q_id           INTEGER NOT NULL,
@@ -225,7 +229,7 @@ func (m *fileDBManager) createInflightTable() error {
 }
 
 // create acked table
-func (m *fileDBManager) createAckedTable() error {
+func (m *FileDBManager) createAckedTable() error {
 	createTableSQL :=
 		`CREATE TABLE IF NOT EXISTS acked (
 		group_name  TEXT NOT NULL,                       -- 컨슈머 그룹
@@ -239,7 +243,7 @@ func (m *fileDBManager) createAckedTable() error {
 }
 
 // create dlq table
-func (m *fileDBManager) createDLQTable() error {
+func (m *FileDBManager) createDLQTable() error {
 	createTableSQL :=
 		`CREATE TABLE IF NOT EXISTS dlq (
 		id INTEGER PRIMARY KEY,                          -- rowid 기반 PK
@@ -255,13 +259,13 @@ func (m *fileDBManager) createDLQTable() error {
 	return err
 }
 
-func (m *fileDBManager) WriteMessage(msg []byte) (err error) {
+func (m *FileDBManager) WriteMessage(msg []byte) (err error) {
 	gid := util.GenerateGlobalID()
 	pid := 0
 	return m.WriteMessageWithMeta(msg, gid, pid)
 }
 
-func (m *fileDBManager) WriteMessageWithMeta(msg []byte, globalID string, partitionID int) (err error) {
+func (m *FileDBManager) WriteMessageWithMeta(msg []byte, globalID string, partitionID int) (err error) {
 	tx, err := m.db.Begin()
 	if err != nil {
 		return err
@@ -277,12 +281,12 @@ func (m *fileDBManager) WriteMessageWithMeta(msg []byte, globalID string, partit
 	return err
 }
 
-func (m *fileDBManager) ReadMessage(group, consumerID string, leaseSec int) (_ queueMsg, err error) {
+func (m *FileDBManager) ReadMessage(group, consumerID string, leaseSec int) (_ queueMsg, err error) {
 	partitionID := 0
 	return m.ReadMessageWithMeta(group, partitionID, consumerID, leaseSec)
 }
 
-func (m *fileDBManager) ReadMessageWithMeta(group string, partitionID int, consumerID string, leaseSec int) (_ queueMsg, err error) {
+func (m *FileDBManager) ReadMessageWithMeta(group string, partitionID int, consumerID string, leaseSec int) (_ queueMsg, err error) {
 	tx, err := m.db.Begin()
 	if err != nil {
 		return queueMsg{}, err
@@ -353,14 +357,14 @@ func (m *fileDBManager) ReadMessageWithMeta(group string, partitionID int, consu
 		WHERE i.group_name = ? AND i.consumer_id = ? AND i.partition_id = ?
 		ORDER BY i.claimed_at DESC
 		LIMIT 1
-	`, group, consumerID, partitionID).Scan(&msg.Id, &msg.Msg, &msg.Insert_ts, &msg.Receipt, &msg.GlobalID, &msg.PartitionID)
+	`, group, consumerID, partitionID).Scan(&msg.ID, &msg.Msg, &msg.InsertTS, &msg.Receipt, &msg.GlobalID, &msg.PartitionID)
 	if err != nil {
 		return queueMsg{}, err
 	}
 	return msg, nil
 }
 
-func (m *fileDBManager) AckMessage(group string, msgID int64, receipt string) (err error) {
+func (m *FileDBManager) AckMessage(group string, msgID int64, receipt string) (err error) {
 	var globalID string
 	var partitionID int
 	err = m.db.QueryRow(`SELECT global_id, partition_id FROM queue WHERE id = ?`, msgID).Scan(&globalID, &partitionID)
@@ -370,7 +374,7 @@ func (m *fileDBManager) AckMessage(group string, msgID int64, receipt string) (e
 	return m.AckMessageWithMeta(group, partitionID, globalID, receipt)
 }
 
-func (m *fileDBManager) AckMessageWithMeta(group string, partitionID int, globalID, receipt string) (err error) {
+func (m *FileDBManager) AckMessageWithMeta(group string, partitionID int, globalID, receipt string) (err error) {
 	tx, err := m.db.Begin()
 	if err != nil {
 		return err
@@ -393,7 +397,7 @@ func (m *fileDBManager) AckMessageWithMeta(group string, partitionID int, global
 	return nil
 }
 
-func (m *fileDBManager) NackMessage(group string, msgID int64, receipt string, backoff time.Duration, maxDeliveries int, reason string) (err error) {
+func (m *FileDBManager) NackMessage(group string, msgID int64, receipt string, backoff time.Duration, maxDeliveries int, reason string) (err error) {
 	var globalID string
 	var partitionID int
 	err = m.db.QueryRow(`SELECT global_id, partition_id FROM queue WHERE id = ?`, msgID).Scan(&globalID, &partitionID)
@@ -403,7 +407,7 @@ func (m *fileDBManager) NackMessage(group string, msgID int64, receipt string, b
 	return m.NackMessageWithMeta(group, partitionID, globalID, receipt, backoff, maxDeliveries, reason)
 }
 
-func (m *fileDBManager) NackMessageWithMeta(group string, partitionID int, globalID, receipt string, backoff time.Duration, maxDeliveries int, reason string) (err error) {
+func (m *FileDBManager) NackMessageWithMeta(group string, partitionID int, globalID, receipt string, backoff time.Duration, maxDeliveries int, reason string) (err error) {
 	tx, err := m.db.Begin()
 	if err != nil {
 		return err
@@ -478,7 +482,7 @@ func (m *fileDBManager) NackMessageWithMeta(group string, partitionID int, globa
 	return nil
 }
 
-func (m *fileDBManager) GetStatus() (internal.QueueStatus, error) {
+func (m *FileDBManager) GetStatus() (internal.QueueStatus, error) {
 	var status internal.QueueStatus = internal.QueueStatus{
 		QueueType:        "fileDB",
 		TotalMessages:    0,
@@ -509,12 +513,12 @@ func (m *fileDBManager) GetStatus() (internal.QueueStatus, error) {
 	return status, nil
 }
 
-func (m *fileDBManager) PeekMessage(group string) (_ queueMsg, err error) {
+func (m *FileDBManager) PeekMessage(group string) (_ queueMsg, err error) {
 	partitionID := 0
 	return m.PeekMessageWithMeta(group, partitionID)
 }
 
-func (m *fileDBManager) PeekMessageWithMeta(group string, partitionID int) (_ queueMsg, err error) {
+func (m *FileDBManager) PeekMessageWithMeta(group string, partitionID int) (_ queueMsg, err error) {
 	tx, err := m.db.Begin()
 	if err != nil {
 		return queueMsg{}, err
@@ -539,7 +543,7 @@ func (m *fileDBManager) PeekMessageWithMeta(group string, partitionID int) (_ qu
 		  AND q.partition_id = ?
 		ORDER BY q.id ASC
 		LIMIT 1
-	`, group, partitionID, group, partitionID, partitionID).Scan(&msg.Id, &msg.Msg, &msg.Insert_ts, &msg.Receipt, &msg.GlobalID, &msg.PartitionID)
+	`, group, partitionID, group, partitionID, partitionID).Scan(&msg.ID, &msg.Msg, &msg.InsertTS, &msg.Receipt, &msg.GlobalID, &msg.PartitionID)
 	if err == sql.ErrNoRows {
 		return queueMsg{}, ErrEmpty
 	}
@@ -549,7 +553,7 @@ func (m *fileDBManager) PeekMessageWithMeta(group string, partitionID int) (_ qu
 	return msg, nil
 }
 
-func (m *fileDBManager) RenewMessage(group string, msgID int64, receipt string, extendSec int) error {
+func (m *FileDBManager) RenewMessage(group string, msgID int64, receipt string, extendSec int) error {
 	var globalID string
 	err := m.db.QueryRow(`SELECT global_id FROM queue WHERE id = ?`, msgID).Scan(&globalID)
 	if err != nil {
@@ -558,7 +562,7 @@ func (m *fileDBManager) RenewMessage(group string, msgID int64, receipt string, 
 	return m.RenewMessageWithMeta(group, globalID, receipt, extendSec)
 }
 
-func (m *fileDBManager) RenewMessageWithMeta(group string, globalID, receipt string, extendSec int) error {
+func (m *FileDBManager) RenewMessageWithMeta(group string, globalID, receipt string, extendSec int) error {
 	if extendSec < 1 {
 		extendSec = 1
 	}
