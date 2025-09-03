@@ -14,19 +14,24 @@ import (
 	"golang.org/x/time/rate"
 )
 
-type clientLimiter struct {
+type ClientLimiter struct {
 	limiter  *rate.Limiter
 	lastSeen time.Time
+}
+
+type RateLimiter struct {
+	clients map[string]*ClientLimiter
+	lock    *sync.Mutex
+	limit   int
+	burst   int
 }
 
 type httpServerInstance struct {
 	Addr  string
 	Queue internal.Queue
 	ApiKey string
-	clients map[string]*clientLimiter
+	limiter RateLimiter
 }
-
-var clientMapLock sync.Mutex
 
 func StartServer(ctx context.Context, config *internal.Config, queue internal.Queue) error {
 	// Start the HTTP server
@@ -34,11 +39,19 @@ func StartServer(ctx context.Context, config *internal.Config, queue internal.Qu
 	if addr == 0 {
 		addr = 8080
 	}
+
+	rateLimiter := RateLimiter{
+		clients: make(map[string]*ClientLimiter),
+		lock:    &sync.Mutex{},
+		limit:   config.HTTP.Rate.Limit,
+		burst:   config.HTTP.Rate.Burst,
+	}
+
 	httpServerInstance := &httpServerInstance{
 		Addr:  fmt.Sprintf(":%d", addr),
 		Queue: queue,
 		ApiKey: config.HTTP.Auth.APIKey,
-		clients: make(map[string]*clientLimiter),
+		limiter: rateLimiter,
 	}
 
 	server := &http.Server{
@@ -54,7 +67,7 @@ func StartServer(ctx context.Context, config *internal.Config, queue internal.Qu
 		}
 	}()
 
-	go checkExpiredClients(ctx, httpServerInstance.clients)
+	go checkExpiredClients(ctx, httpServerInstance.limiter)
 
 	err := server.ListenAndServe()
 	if err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -68,7 +81,7 @@ func router(httpServerInstance *httpServerInstance) *gin.Engine {
 	r.Use(LoggerMiddleware())
 	r.Use(ErrorHandlingMiddleware())
 	r.Use(RequestIDMiddleware())
-	r.Use(RateLimitMiddleware(httpServerInstance.clients, 1))
+	r.Use(RateLimitMiddleware(httpServerInstance.limiter, 1))
 
 	reader := r.Group("/api/v1")
 	{
@@ -89,20 +102,20 @@ func router(httpServerInstance *httpServerInstance) *gin.Engine {
 	return r
 }
 
-func checkExpiredClients(ctx context.Context, clients map[string]*clientLimiter) {
+func checkExpiredClients(ctx context.Context, limiter RateLimiter) {
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ticker.C:
-			clientMapLock.Lock()
-			for ip, limiter := range clients {
-				if time.Since(limiter.lastSeen) > time.Second*3 {
-					delete(clients, ip)
+			limiter.lock.Lock()
+			for ip, client := range limiter.clients {
+				if time.Since(client.lastSeen) > time.Second*3 {
+					delete(limiter.clients, ip)
 				}
 			}
-			clientMapLock.Unlock()
+			limiter.lock.Unlock()
 		case <-ctx.Done():
 			return
 		}

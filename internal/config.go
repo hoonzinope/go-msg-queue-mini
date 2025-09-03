@@ -22,6 +22,10 @@ type Config struct {
 	HTTP struct {
 		Enabled bool `yaml:"enabled"`
 		Port    int  `yaml:"port"`
+		Rate    struct {
+			Limit int `yaml:"limit"`
+			Burst int `yaml:"burst"`
+		} `yaml:"rate"`
 		Auth    struct {
 			APIKey string `yaml:"api_key"`
 		} `yaml:"auth"`

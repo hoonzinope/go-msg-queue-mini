@@ -1,7 +1,7 @@
 package http
 
 import (
-	"go-msg-queue-mini/util"
+	"crypto/subtle"
 	"log"
 	"net/http"
 	"time"
@@ -67,8 +67,7 @@ func RequestIDMiddleware() gin.HandlerFunc {
 func AuthMiddleware(apiKey string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		header_api_key := c.GetHeader("X-API-Key")
-		util.Info("API Key from header: " + header_api_key)
-		if header_api_key != apiKey || header_api_key == "" {
+		if subtle.ConstantTimeCompare([]byte(header_api_key), []byte(apiKey)) != 1 {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
 			c.Abort()
 			return
@@ -78,21 +77,23 @@ func AuthMiddleware(apiKey string) gin.HandlerFunc {
 }
 
 // rate limit
-func RateLimitMiddleware(clients map[string]*clientLimiter, limit int) gin.HandlerFunc {
+func RateLimitMiddleware(limiter RateLimiter, limit int) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		clientIP := c.ClientIP()
-		clientMapLock.Lock()
-		client_limiter, exists := clients[clientIP]
+		limiter.lock.Lock()
+		client_limiter, exists := limiter.clients[clientIP]
 		if !exists {
-			client_limiter = &clientLimiter{
-				limiter: rate.NewLimiter(rate.Limit(limit), limit),
+			limit := limiter.limit
+			burst := limiter.burst
+			client_limiter = &ClientLimiter{
+				limiter: rate.NewLimiter(rate.Limit(limit), burst),
 				lastSeen: time.Now(),
 			}
-			clients[clientIP] = client_limiter
+			limiter.clients[clientIP] = client_limiter
 		} else {
 			client_limiter.lastSeen = time.Now()
 		}
-		clientMapLock.Unlock()
+		limiter.lock.Unlock()
 
 		if !client_limiter.limiter.Allow() {
 			c.JSON(http.StatusTooManyRequests, gin.H{"error": "Too many requests"})
