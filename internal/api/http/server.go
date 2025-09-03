@@ -111,7 +111,7 @@ func checkExpiredClients(ctx context.Context, limiter RateLimiter) {
 		case <-ticker.C:
 			limiter.lock.Lock()
 			for ip, client := range limiter.clients {
-				if time.Since(client.lastSeen) > time.Second*3 {
+				if time.Since(client.lastSeen) > time.Minute {
 					delete(limiter.clients, ip)
 				}
 			}

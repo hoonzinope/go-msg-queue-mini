@@ -38,11 +38,8 @@ func ReadConfig(filePath string) (*Config, error) {
 		return nil, fmt.Errorf("error reading config file: %w", err)
 	}
 
-	// --- 추가된 부분 시작 ---
-    // os.ExpandEnv 함수를 사용해 ${VAR} 또는 $VAR 형태의 문자열을
-    // 해당 환경 변수의 값으로 치환합니다.
+    // os.ExpandEnv to replace environment variables in the YAML content
     expandedYaml := os.ExpandEnv(string(yamlFile))
-    // --- 추가된 부분 끝 ---
 
 	var config Config
 	err = yaml.Unmarshal([]byte(expandedYaml), &config)
