@@ -12,6 +12,8 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
+
+	"github.com/joho/godotenv"
 )
 
 var ctx, cancel = context.WithCancel(context.Background())
@@ -21,6 +23,12 @@ func main() {
 	util.Info("Starting message queue...")
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+
+	err := godotenv.Load(".env")
+	if err != nil {
+		util.Error(fmt.Sprintf("Error loading .env file: %v", err))
+		return
+	}
 
 	config, err := internal.ReadConfig("config.yml")
 	if err != nil {

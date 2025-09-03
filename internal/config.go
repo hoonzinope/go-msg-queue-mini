@@ -22,6 +22,9 @@ type Config struct {
 	HTTP struct {
 		Enabled bool `yaml:"enabled"`
 		Port    int  `yaml:"port"`
+		Auth    struct {
+			APIKey string `yaml:"api_key"`
+		} `yaml:"auth"`
 	} `yaml:"http"`
 }
 
@@ -30,8 +33,15 @@ func ReadConfig(filePath string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("error reading config file: %w", err)
 	}
+
+	// --- 추가된 부분 시작 ---
+    // os.ExpandEnv 함수를 사용해 ${VAR} 또는 $VAR 형태의 문자열을
+    // 해당 환경 변수의 값으로 치환합니다.
+    expandedYaml := os.ExpandEnv(string(yamlFile))
+    // --- 추가된 부분 끝 ---
+
 	var config Config
-	err = yaml.Unmarshal(yamlFile, &config)
+	err = yaml.Unmarshal([]byte(expandedYaml), &config)
 	if err != nil {
 		return nil, fmt.Errorf("error unmarshalling config file: %w", err)
 	}

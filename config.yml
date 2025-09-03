@@ -13,3 +13,5 @@ debug: false # Enable debug mode
 http:
   enabled: true
   port: 8080
+  auth:
+    api_key: ${API_KEY}

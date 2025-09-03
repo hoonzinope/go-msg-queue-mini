@@ -7,14 +7,26 @@ import (
 	"go-msg-queue-mini/internal"
 	"go-msg-queue-mini/util"
 	"net/http"
+	"sync"
+	"time"
 
 	"github.com/gin-gonic/gin"
+	"golang.org/x/time/rate"
 )
+
+type clientLimiter struct {
+	limiter  *rate.Limiter
+	lastSeen time.Time
+}
 
 type httpServerInstance struct {
 	Addr  string
 	Queue internal.Queue
+	ApiKey string
+	clients map[string]*clientLimiter
 }
+
+var clientMapLock sync.Mutex
 
 func StartServer(ctx context.Context, config *internal.Config, queue internal.Queue) error {
 	// Start the HTTP server
@@ -25,6 +37,8 @@ func StartServer(ctx context.Context, config *internal.Config, queue internal.Qu
 	httpServerInstance := &httpServerInstance{
 		Addr:  fmt.Sprintf(":%d", addr),
 		Queue: queue,
+		ApiKey: config.HTTP.Auth.APIKey,
+		clients: make(map[string]*clientLimiter),
 	}
 
 	server := &http.Server{
@@ -40,6 +54,8 @@ func StartServer(ctx context.Context, config *internal.Config, queue internal.Qu
 		}
 	}()
 
+	go checkExpiredClients(ctx, httpServerInstance.clients)
+
 	err := server.ListenAndServe()
 	if err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return fmt.Errorf("error starting server: %w", err)
@@ -49,13 +65,46 @@ func StartServer(ctx context.Context, config *internal.Config, queue internal.Qu
 
 func router(httpServerInstance *httpServerInstance) *gin.Engine {
 	r := gin.Default()
-	r.GET("/api/v1/health", healthCheckHandler)
-	r.POST("/api/v1/enqueue", httpServerInstance.enqueueHandler)
-	r.POST("/api/v1/dequeue", httpServerInstance.dequeueHandler)
-	r.POST("/api/v1/ack", httpServerInstance.ackHandler)
-	r.POST("/api/v1/nack", httpServerInstance.nackHandler)
-	r.GET("/api/v1/status", httpServerInstance.statusHandler)
-	r.POST("/api/v1/peek", httpServerInstance.peekHandler)
-	r.POST("/api/v1/renew", httpServerInstance.renewHandler)
+	r.Use(LoggerMiddleware())
+	r.Use(ErrorHandlingMiddleware())
+	r.Use(RequestIDMiddleware())
+	r.Use(RateLimitMiddleware(httpServerInstance.clients, 1))
+
+	reader := r.Group("/api/v1")
+	{
+		reader.GET("/health", healthCheckHandler)
+		reader.GET("/status", httpServerInstance.statusHandler)
+		reader.POST("/peek", httpServerInstance.peekHandler)
+	}
+	
+	writer := r.Group("/api/v1")
+	writer.Use(AuthMiddleware(httpServerInstance.ApiKey))
+	{
+		writer.POST("/enqueue", httpServerInstance.enqueueHandler)
+		writer.POST("/dequeue", httpServerInstance.dequeueHandler)
+		writer.POST("/ack", httpServerInstance.ackHandler)
+		writer.POST("/nack", httpServerInstance.nackHandler)
+		writer.POST("/renew", httpServerInstance.renewHandler)
+	}
 	return r
+}
+
+func checkExpiredClients(ctx context.Context, clients map[string]*clientLimiter) {
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			clientMapLock.Lock()
+			for ip, limiter := range clients {
+				if time.Since(limiter.lastSeen) > time.Second*3 {
+					delete(clients, ip)
+				}
+			}
+			clientMapLock.Unlock()
+		case <-ctx.Done():
+			return
+		}
+	}
 }
