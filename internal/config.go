@@ -22,6 +22,13 @@ type Config struct {
 	HTTP struct {
 		Enabled bool `yaml:"enabled"`
 		Port    int  `yaml:"port"`
+		Rate    struct {
+			Limit int `yaml:"limit"`
+			Burst int `yaml:"burst"`
+		} `yaml:"rate"`
+		Auth    struct {
+			APIKey string `yaml:"api_key"`
+		} `yaml:"auth"`
 	} `yaml:"http"`
 }
 
@@ -30,8 +37,12 @@ func ReadConfig(filePath string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("error reading config file: %w", err)
 	}
+
+    // os.ExpandEnv to replace environment variables in the YAML content
+    expandedYaml := os.ExpandEnv(string(yamlFile))
+
 	var config Config
-	err = yaml.Unmarshal(yamlFile, &config)
+	err = yaml.Unmarshal([]byte(expandedYaml), &config)
 	if err != nil {
 		return nil, fmt.Errorf("error unmarshalling config file: %w", err)
 	}
