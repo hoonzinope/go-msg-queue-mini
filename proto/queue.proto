@@ -53,13 +53,13 @@ message HealthResponse {
 
 // HTTP: EnqueueRequest{ message json.RawMessage }
 message EnqueueRequest {
-  bytes message = 1;
+  string message = 1;
 }
 
 // HTTP: EnqueueResponse{ status, message }
 message EnqueueResponse {
   string status = 1;           // e.g., "enqueued"
-  bytes  message = 2;          // 원본 페이로드 에코백
+  string  message = 2;          // 원본 페이로드 에코백
 }
 
 // HTTP: DequeueRequest{ group, consumer_id }
@@ -70,7 +70,7 @@ message DequeueRequest {
 
 // HTTP: DequeueMessage{ payload, receipt, id }
 message DequeueMessage {
-  bytes payload = 1;
+  string payload = 1;
   string receipt = 2;
   int64  id = 3;
 }

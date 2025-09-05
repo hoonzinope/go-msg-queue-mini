@@ -11,6 +11,10 @@ import (
 	status "google.golang.org/grpc/status"
 )
 
+const (
+	apiKeyHeader = "x-api-key"
+)
+
 //logging
 func LoggerInterceptor(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
 	start := time.Now()
@@ -38,13 +42,13 @@ func AuthInterceptor(apikey string, protectedMethods map[string]bool) grpc.Unary
 		if !protectedMethods[info.FullMethod] {
 			return handler(ctx, req)
 		}
-		md, ok := metadata.FromIncomingContext(ctx);
+		md, ok := metadata.FromIncomingContext(ctx)
 		if !ok {
 			log.Printf("gRPC call to %s missing metadata", info.FullMethod)
 			return nil, status.Errorf(codes.Unauthenticated, "missing metadata")
 		}
-		key := md.Get("x-api-key")
-		if len(key) > 0 && key[0] != apikey {
+		key := md.Get(apiKeyHeader)
+		if len(key) == 0 || key[0] != apikey {
 			log.Printf("gRPC call to %s unauthorized", info.FullMethod)
 			return nil, status.Errorf(codes.Unauthenticated, "invalid API key")
 		}
