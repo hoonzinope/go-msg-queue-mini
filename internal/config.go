@@ -34,6 +34,9 @@ type Config struct {
 	GRPC struct {
 		Enabled bool `yaml:"enabled"`
 		Port    int  `yaml:"port"`
+		Auth    struct {
+			APIKey string `yaml:"api_key"`
+		} `yaml:"auth"`
 	} `yaml:"grpc"`
 }
 

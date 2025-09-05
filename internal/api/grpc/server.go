@@ -2,7 +2,6 @@ package grpc
 
 import (
 	context "context"
-	"encoding/json"
 	"fmt"
 	"go-msg-queue-mini/internal"
 	"net"
@@ -21,7 +20,24 @@ func StartServer(ctx context.Context, config *internal.Config, queue internal.Qu
 	if err != nil {
 		return err
 	}
-	grpcServer := grpc.NewServer()
+	protectedMethods := map[string]bool{
+		"/queue.v1.QueueService/Enqueue": 		true,
+		"/queue.v1.QueueService/Dequeue": 		true,
+		"/queue.v1.QueueService/Ack":   		true,
+		"/queue.v1.QueueService/Nack":    		true,
+		"/queue.v1.QueueService/Renew":   		true,
+		"/queue.v1.QueueService/Peek":    		false,
+		"/queue.v1.QueueService/Status":  		false,
+		"/queue.v1.QueueService/HealthCheck": 	false,
+	}
+	grpcServer := grpc.NewServer(
+		grpc.ChainUnaryInterceptor(
+			RecoveryInterceptor,
+			LoggerInterceptor,
+			ErrorInterceptor,
+			AuthInterceptor(config.GRPC.Auth.APIKey, protectedMethods),
+		),
+	)
 	queueService := NewQueueServiceServer(queue)
 	RegisterQueueServiceServer(grpcServer, queueService)
 
@@ -46,12 +62,11 @@ func (qs *queueServiceServer) HealthCheck(ctx context.Context, req *EmptyRequest
 }
 
 func (qs *queueServiceServer) Enqueue(ctx context.Context, req *EnqueueRequest) (res *EnqueueResponse, err error) {
-	if err := qs.Queue.Enqueue(req.Message); err != nil {
+	message := req.GetMessage()
+	if err := qs.Queue.Enqueue(message); err != nil {
 		return nil, err
 	}
-	return &EnqueueResponse{
-		Status: "ok",
-	}, nil
+	return &EnqueueResponse{Status: "ok", Message: message}, nil
 }
 
 func (qs *queueServiceServer) Dequeue(ctx context.Context, req *DequeueRequest) (res *DequeueResponse, err error) {
@@ -59,14 +74,9 @@ func (qs *queueServiceServer) Dequeue(ctx context.Context, req *DequeueRequest) 
 	if err != nil {
 		return nil, err
 	}
-	payload, err := json.Marshal(message.Payload)
-	if err != nil {
-		return nil, fmt.Errorf("failed to cast payload to []byte: %v", err)
-	}
-
 	DequeueMessage := &DequeueMessage{
 		Id:      message.ID,
-		Payload: payload,
+		Payload: message.Payload.(string),
 		Receipt: message.Receipt,
 	}
 	return &DequeueResponse{
@@ -98,13 +108,9 @@ func (qs *queueServiceServer) Peek(ctx context.Context, req *PeekRequest) (res *
 	if err != nil {
 		return nil, err
 	}
-	payload, err := json.Marshal(message.Payload)
-	if err != nil {
-		return nil, fmt.Errorf("failed to cast payload to []byte: %v", err)
-	}
 	dequeueMessage := &DequeueMessage{
 		Id:      message.ID,
-		Payload: payload,
+		Payload: message.Payload.(string),
 		Receipt: message.Receipt,
 	}
 	return &PeekResponse{
