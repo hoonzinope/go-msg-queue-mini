@@ -32,6 +32,7 @@
 │   │   └── dto.go               # 요청/응답 DTO
 │   ├── api/grpc/                # gRPC 서버/자동 생성 파일(pb)
 │   │   ├── server.go
+│   │   ├── interceptor.go       # gRPC 인터셉터(로깅/에러/복구/인증)
 │   │   ├── queue.pb.go
 │   │   └── queue_grpc.pb.go
 │   ├── core/
@@ -82,6 +83,8 @@ http:
 grpc:
   enabled: true        # gRPC 서버 활성화
   port: 50051
+  auth:                # gRPC 인터셉터 인증(API 키)
+    api_key: ${API_KEY}
 ```
 
 - `file` 모드 사용 시 디렉터리 생성: `mkdir -p ./data/persistence`
@@ -135,6 +138,20 @@ grpc:
 - 주요 RPC: `Enqueue`, `Dequeue`, `Ack`, `Nack`, `Peek`, `Renew`, `Status` (proto: `proto/queue.proto`).
 - 호출 예시(grpcurl): `grpcurl -plaintext localhost:50051 list` / `grpcurl -plaintext -d '{"message":{"text":"hi"}}' localhost:50051 QueueService/Enqueue`.
 
+## gRPC 인터셉터
+- 로깅: `LoggerInterceptor`가 호출 메서드/소요시간을 기록합니다.
+- 에러 로그: `ErrorInterceptor`가 핸들러 에러를 로깅합니다.
+- 복구: `RecoveryInterceptor`가 panic을 내부 오류(codes.Internal)로 변환합니다.
+- 인증: `AuthInterceptor(apiKey, protectedMethods)`가 보호 메서드에 대해 메타데이터 `x-api-key`를 검증합니다.
+  - 보호됨: `/queue.v1.QueueService/Enqueue`, `/Dequeue`, `/Ack`, `/Nack`, `/Renew`
+  - 공개됨: `/Peek`, `/Status`, `/HealthCheck`
+  - gRPC 메타데이터 키는 소문자 `x-api-key`입니다. HTTP와 다르게 헤더 키 대소문자가 중요합니다.
+- 체인 순서: Recovery → Logger → Error → Auth (서버 초기화 시 `grpc.ChainUnaryInterceptor`로 묶음).
+
+예시(grpcurl)
+- 공개 RPC 호출: `grpcurl -plaintext localhost:50051 queue.v1.QueueService/HealthCheck`
+- 보호 RPC 호출: `grpcurl -plaintext -H 'x-api-key: $API_KEY' -d '{"message":{"text":"hello"}}' localhost:50051 queue.v1.QueueService/Enqueue`
+
 ## 테스트
 
 - 표준 `testing` 프레임워크 사용: `go test ./... -v`
@@ -148,6 +165,7 @@ grpc:
 - JSON 필드 표준화 및 에러 처리 개선, 서버 종료 시 graceful shutdown 보장.
 - HTTP 구조 리팩터링: server/handler/dto 파일 분리.
 - 문서: 기여자 가이드 `AGENTS.md` 추가.
+ - gRPC 인터셉터 추가: 로깅/에러/복구/메타데이터 기반 API 키 인증(`x-api-key`), 보호 메서드 분리. `config.yml`에 `grpc.auth.api_key` 추가.
 
 ## 보안/운영 팁
 

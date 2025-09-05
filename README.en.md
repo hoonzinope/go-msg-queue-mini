@@ -32,6 +32,7 @@ A compact yet robust Go-based message queue. It supports Producer/Consumer runti
 │   │   └── dto.go               # Request/response DTOs
 │   ├── api/grpc/                # gRPC server + generated pb files
 │   │   ├── server.go
+│   │   ├── interceptor.go       # gRPC interceptors (logging/error/recovery/auth)
 │   │   ├── queue.pb.go
 │   │   └── queue_grpc.pb.go
 │   ├── core/
@@ -82,6 +83,8 @@ http:
 grpc:
   enabled: true        # Enable gRPC server
   port: 50051
+  auth:                # API key for gRPC interceptor auth
+    api_key: ${API_KEY}
 ```
 
 - For `file` mode, create the directory: `mkdir -p ./data/persistence`
@@ -139,6 +142,20 @@ Common: server returns `X-Request-ID` (auto-generated if missing). Bursts may re
   - List services: `grpcurl -plaintext localhost:50051 list`
   - Enqueue: `grpcurl -plaintext -d '{"message":{"text":"hello"}}' localhost:50051 QueueService/Enqueue`
 
+## gRPC Interceptors
+- Logging: `LoggerInterceptor` logs method and latency per call.
+- Error log: `ErrorInterceptor` logs handler errors.
+- Recovery: `RecoveryInterceptor` converts panics to `codes.Internal`.
+- Auth: `AuthInterceptor(apiKey, protectedMethods)` enforces metadata `x-api-key` for protected methods.
+  - Protected: `/queue.v1.QueueService/Enqueue`, `/Dequeue`, `/Ack`, `/Nack`, `/Renew`
+  - Public: `/Peek`, `/Status`, `/HealthCheck`
+  - Note: gRPC metadata key is lowercase `x-api-key` (unlike HTTP header casing).
+- Chain order: Recovery → Logger → Error → Auth (via `grpc.ChainUnaryInterceptor`).
+
+Examples (grpcurl)
+- Public RPC: `grpcurl -plaintext localhost:50051 queue.v1.QueueService/HealthCheck`
+- Protected RPC: `grpcurl -plaintext -H 'x-api-key: $API_KEY' -d '{"message":{"text":"hello"}}' localhost:50051 queue.v1.QueueService/Enqueue`
+
 ## Tests
 
 - Uses standard `testing`: `go test ./... -v`
@@ -152,6 +169,7 @@ Common: server returns `X-Request-ID` (auto-generated if missing). Bursts may re
 - Standardized JSON fields, improved error handling, and graceful shutdown on exit.
 - HTTP refactor into server/handler/dto files.
 - Docs: added contributor guide `AGENTS.md`.
+ - Added gRPC interceptors: logging/error/recovery/API-key auth via metadata (`x-api-key`), with protected vs public methods. Added `grpc.auth.api_key` to `config.yml`.
 
 ## Security/Operations
 
