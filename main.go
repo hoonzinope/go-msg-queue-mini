@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"go-msg-queue-mini/internal"
+	"go-msg-queue-mini/internal/api/grpc"
 	"go-msg-queue-mini/internal/api/http"
 	fileDBQueue "go-msg-queue-mini/internal/core"
 	runner "go-msg-queue-mini/internal/runner"
@@ -116,6 +117,17 @@ func main() {
 				err := http.StartServer(ctx, config, queue)
 				if err != nil {
 					util.Error(fmt.Sprintf("Error starting HTTP server: %v", err))
+				}
+			}()
+		}
+
+		if config.GRPC.Enabled {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				err := grpc.StartServer(ctx, config, queue)
+				if err != nil {
+					util.Error(fmt.Sprintf("Error starting gRPC server: %v", err))
 				}
 			}()
 		}

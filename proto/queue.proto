@@ -1,0 +1,139 @@
+syntax = "proto3";
+
+package queue.v1;
+
+option go_package = "internal/api/grpc";
+
+// -----------------------------------------------------------------------------
+// Notes on error mapping (server에서 적절히 반환 권장)
+// - 큐 비어있음(core.ErrEmpty)          -> NOT_FOUND
+// - 경합(core.ErrContended)            -> ABORTED (또는 FAILED_PRECONDITION)
+// - 임대 만료(core.ErrLeaseExpired)     -> FAILED_PRECONDITION
+// - 기타 내부 오류                      -> INTERNAL / UNKNOWN
+// -----------------------------------------------------------------------------
+
+service QueueService {
+  // Health check (HTTP의 /health 대체)
+  rpc HealthCheck(EmptyRequest) returns (HealthResponse);
+
+  // Enqueue: 메시지를 큐에 적재
+  rpc Enqueue(EnqueueRequest) returns (EnqueueResponse);
+
+  // Dequeue: 그룹/컨슈머 기준으로 메시지 하나를 임대(lease)하여 가져옴
+  // - 큐가 비었으면 NOT_FOUND로 반환 권장
+  // - 경합이면 ABORTED/FAILED_PRECONDITION 권장
+  rpc Dequeue(DequeueRequest) returns (DequeueResponse);
+
+  // Ack/Nack: 처리 성공/실패 확정
+  rpc Ack(AckRequest) returns (AckResponse);
+  rpc Nack(NackRequest) returns (NackResponse);
+
+  // Peek: 임대 없이 맨 앞 메시지 엿보기
+  // - 큐가 비었으면 NOT_FOUND로 반환 권장
+  rpc Peek(PeekRequest) returns (PeekResponse);
+
+  // Renew: 임대(lease) 연장
+  // - 임대 만료 시 FAILED_PRECONDITION 권장
+  rpc Renew(RenewRequest) returns (RenewResponse);
+
+  // Status: 큐 상태 조회
+  rpc Status(EmptyRequest) returns (StatusResponse);
+}
+
+// -----------------------------------------------------------------------------
+// Messages
+// -----------------------------------------------------------------------------
+
+message EmptyRequest {
+}
+
+message HealthResponse {
+  string status = 1; // "ok" 등 단순 응답
+}
+
+// HTTP: EnqueueRequest{ message json.RawMessage }
+message EnqueueRequest {
+  bytes message = 1;
+}
+
+// HTTP: EnqueueResponse{ status, message }
+message EnqueueResponse {
+  string status = 1;           // e.g., "enqueued"
+  bytes  message = 2;          // 원본 페이로드 에코백
+}
+
+// HTTP: DequeueRequest{ group, consumer_id }
+message DequeueRequest {
+  string group = 1;
+  string consumer_id = 2;
+}
+
+// HTTP: DequeueMessage{ payload, receipt, id }
+message DequeueMessage {
+  bytes payload = 1;
+  string receipt = 3;
+  int64  id = 4;
+}
+
+// HTTP: DequeueResponse{ status, message }
+message DequeueResponse {
+  string status = 1;           // e.g., "dequeued"
+  DequeueMessage message = 2;
+}
+
+// HTTP: AckRequest{ group, message_id, receipt }
+message AckRequest {
+  string group = 1;
+  int64  message_id = 2;
+  string receipt = 3;
+}
+message AckResponse {
+  string status = 1; // "ack ok"
+}
+
+// HTTP: NackRequest{ group, message_id, receipt }
+message NackRequest {
+  string group = 1;
+  int64  message_id = 2;
+  string receipt = 3;
+}
+message NackResponse {
+  string status = 1; // "nack ok"
+}
+
+// HTTP: PeekRequest{ group }
+message PeekRequest {
+  string group = 1;
+}
+
+// HTTP: PeekResponse{ status, message }
+message PeekResponse {
+  string status = 1;           // "ok"
+  DequeueMessage message = 2;
+}
+
+// HTTP: RenewRequest{ group, message_id, receipt, extend_sec }
+message RenewRequest {
+  string group = 1;
+  int64  message_id = 2;
+  string receipt = 3;
+  int32  extend_sec = 4;
+}
+message RenewResponse {
+  string status = 1; // "renewed"
+}
+
+// HTTP: StatusResponse{ status, queue_status }
+message StatusResponse {
+  string status = 1; // "ok"
+  QueueStatus queue_status = 2;
+}
+
+// HTTP: QueueStatus{ queue_type, total_messages, acked_messages, inflight_messages, dlq_messages }
+message QueueStatus {
+  string queue_type = 1;
+  int64  total_messages = 2;
+  int64  acked_messages = 3;
+  int64  inflight_messages = 4;
+  int64  dlq_messages = 5;
+}

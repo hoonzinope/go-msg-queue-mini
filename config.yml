@@ -18,3 +18,7 @@ http:
     burst: 5
   auth:
     api_key: ${API_KEY}
+
+grpc:
+  enabled: true
+  port: 50051
