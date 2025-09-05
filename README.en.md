@@ -2,7 +2,7 @@
 
 [한국어](./README.md)
 
-A compact yet robust Go-based message queue. It supports both Producer/Consumer runtime and an HTTP API, featuring SQLite-backed persistence, Ack/Nack, DLQ, lease and renew, peek, and queue status.
+A compact yet robust Go-based message queue. It supports Producer/Consumer runtime and HTTP/gRPC APIs, featuring SQLite-backed persistence, Ack/Nack, DLQ, lease and renew, peek, and queue status.
 
 ## Key Features
 
@@ -12,13 +12,13 @@ A compact yet robust Go-based message queue. It supports both Producer/Consumer 
 - **Lease/Renew**: Message lease with `/renew` to extend
 - **Peek**: Inspect next message without claiming via `/peek`
 - **Status**: `/status` returns totals for queue/acked/inflight/dlq
-- **Modes**: `debug` (local producers/consumers + monitor) or HTTP API server
+- **Modes**: `debug` (local producers/consumers + monitor) or HTTP/gRPC server
 
 ## Project Structure
 
 ```
 .
-├── main.go                      # Entrypoint: choose debug/HTTP mode
+├── main.go                      # Entrypoint: choose debug/HTTP/gRPC
 ├── config.yml                   # Runtime and persistence config
 ├── go.mod / go.sum
 ├── README.md / README.en.md
@@ -30,6 +30,10 @@ A compact yet robust Go-based message queue. It supports both Producer/Consumer 
 │   │   ├── server.go            # Gin HTTP server bootstrap
 │   │   ├── handler.go           # API handlers (enqueue/dequeue/ack/nack/peek/renew/status/health)
 │   │   └── dto.go               # Request/response DTOs
+│   ├── api/grpc/                # gRPC server + generated pb files
+│   │   ├── server.go
+│   │   ├── queue.pb.go
+│   │   └── queue_grpc.pb.go
 │   ├── core/
 │   │   ├── filedb_queue.go      # Queue adapter (Queue implementation)
 │   │   └── filedb_manager.go    # SQLite engine (Ack/Nack, DLQ, leases, cleanup)
@@ -49,6 +53,7 @@ A compact yet robust Go-based message queue. It supports both Producer/Consumer 
 - Build: `go build -o bin/go-msg-queue-mini ./...`
 - Test: `go test ./... -v` (coverage: `-cover`)
 - Format/Lint: `go fmt ./...`, `go vet ./...`, `go mod tidy`
+- Regenerate gRPC (after editing `proto/queue.proto`): `protoc --go_out=. --go-grpc_out=. proto/queue.proto`
 
 ## Configuration (`config.yml`)
 
@@ -68,10 +73,20 @@ debug: false           # If true, runs built-in producers/consumers/monitor
 http:
   enabled: true        # Enable HTTP API
   port: 8080           # Port (default 8080)
+  rate:                # IP-based rate limiting (429 on exceed)
+    limit: 1
+    burst: 5
+  auth:                # Protect writer endpoints
+    api_key: ${API_KEY}
+
+grpc:
+  enabled: true        # Enable gRPC server
+  port: 50051
 ```
 
 - For `file` mode, create the directory: `mkdir -p ./data/persistence`
 - SQLite DB file path: `./data/persistence/filedb_queue.db`
+- `.env` is loaded (via `github.com/joho/godotenv`), and `config.yml` supports env expansion (`$VAR`/`${VAR}`).
 
 ## Modes
 
@@ -81,13 +96,15 @@ http:
 
 - `debug: false` + `http.enabled: true`
   - Runs the HTTP API server on `:8080` (or configured port).
+- `grpc.enabled: true`
+  - Runs the gRPC server on `:50051` (or configured port).
 
 ## HTTP API
 
 - Health: `GET /api/v1/health`
   - Example: `curl -s localhost:8080/api/v1/health`
 
-- Enqueue: `POST /api/v1/enqueue`
+- Enqueue: `POST /api/v1/enqueue` (header: `X-API-Key: <key>` required)
   - Request: `{ "message": <any JSON> }`
   - Example: `curl -X POST localhost:8080/api/v1/enqueue -H 'Content-Type: application/json' -d '{"message": {"text":"hello"}}'`
 
@@ -95,28 +112,46 @@ http:
   - Request: `{ "group": "g1", "consumer_id": "c-1" }`
   - Response: `{ status, message: { id, receipt, payload } }`
 
-- Ack: `POST /api/v1/ack`
+- Ack: `POST /api/v1/ack` (requires `X-API-Key`)
   - Request: `{ "group": "g1", "message_id": 1, "receipt": "..." }`
 
-- Nack: `POST /api/v1/nack`
+- Nack: `POST /api/v1/nack` (requires `X-API-Key`)
   - Request: `{ "group": "g1", "message_id": 1, "receipt": "..." }`
   - Applies exponential backoff + jitter; moves to DLQ after `max-retry`.
 
 - Peek: `POST /api/v1/peek`
   - Request: `{ "group": "g1" }` (inspect next available message without lease)
 
-- Renew: `POST /api/v1/renew`
+- Renew: `POST /api/v1/renew` (requires `X-API-Key`)
   - Request: `{ "group": "g1", "message_id": 1, "receipt": "...", "extend_sec": 5 }`
   - Extends only if the current lease is valid; returns 409 if expired.
 
 - Status: `GET /api/v1/status`
   - Response: `{ queue_status: { queue_type, total_messages, acked_messages, inflight_messages, dlq_messages } }`
 
+Common: server returns `X-Request-ID` (auto-generated if missing). Bursts may receive 429 Too Many Requests due to rate limiting.
+
+## gRPC API
+- Enable with `grpc.enabled: true`, default port `50051`.
+- Health: `QueueService/HealthCheck` → `{ status: "ok" }`.
+- Core RPCs: `Enqueue`, `Dequeue`, `Ack`, `Nack`, `Peek`, `Renew`, `Status` (proto: `proto/queue.proto`).
+- Example (grpcurl):
+  - List services: `grpcurl -plaintext localhost:50051 list`
+  - Enqueue: `grpcurl -plaintext -d '{"message":{"text":"hello"}}' localhost:50051 QueueService/Enqueue`
+
 ## Tests
 
 - Uses standard `testing`: `go test ./... -v`
 - Config loader test: `internal/config_test.go`
 - Optionally use `-cover` for coverage
+
+## Changes Summary
+- Added gRPC Queue Service: `internal/api/grpc/*`, `proto/queue.proto`, and `grpc.enabled/port` config.
+- Added HTTP middlewares: logging, error handling, Request-ID, API key auth, and IP-based rate limiting (with periodic cleanup).
+- Config improvements: `.env` loading and env expansion for `config.yml`; new rate/auth/gRPC sections.
+- Standardized JSON fields, improved error handling, and graceful shutdown on exit.
+- HTTP refactor into server/handler/dto files.
+- Docs: added contributor guide `AGENTS.md`.
 
 ## Security/Operations
 

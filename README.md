@@ -2,7 +2,7 @@
 
 [English](./README.en.md)
 
-간단하지만 견고한 Go 기반 메시지 큐입니다. Producer/Consumer 실행과 HTTP API를 모두 지원하며, SQLite 기반 영속성과 Ack/Nack, DLQ, 리스(lease) 연장 등 기본기를 갖춘 소형 큐 엔진입니다.
+간단하지만 견고한 Go 기반 메시지 큐입니다. Producer/Consumer 실행과 HTTP/gRPC API를 지원하며, SQLite 기반 영속성과 Ack/Nack, DLQ, 리스(lease) 연장 등 기본기를 갖춘 소형 큐 엔진입니다.
 
 ## 주요 특징
 
@@ -12,7 +12,7 @@
 - **리스/갱신**: 메시지 점유 기간(lease)과 `/renew`를 통한 연장
 - **미리보기/피킹**: 할당 없이 확인하는 `/peek`
 - **상태 확인**: 합계/ACK/Inflight/DLQ를 반환하는 `/status`
-- **운영 모드**: `debug` 모드(내장 프로듀서/컨슈머 + 모니터) 또는 HTTP API 서버
+- **운영 모드**: `debug` 모드(내장 프로듀서/컨슈머 + 모니터) 또는 HTTP/gRPC 서버
 
 ## 프로젝트 구조
 
@@ -30,6 +30,10 @@
 │   │   ├── server.go            # Gin HTTP 서버 부트스트랩
 │   │   ├── handler.go           # API 핸들러 (enqueue/dequeue/ack/nack/peek/renew/status/health)
 │   │   └── dto.go               # 요청/응답 DTO
+│   ├── api/grpc/                # gRPC 서버/자동 생성 파일(pb)
+│   │   ├── server.go
+│   │   ├── queue.pb.go
+│   │   └── queue_grpc.pb.go
 │   ├── core/
 │   │   ├── filedb_queue.go      # 큐 어댑터 (Queue 구현)
 │   │   └── filedb_manager.go    # SQLite 엔진 (Ack/Nack, DLQ, 리스, 정리 작업)
@@ -49,6 +53,7 @@
 - 빌드: `go build -o bin/go-msg-queue-mini ./...`
 - 테스트: `go test ./... -v` (커버리지: `-cover`)
 - 포맷/린트: `go fmt ./...` / `go vet ./...` / `go mod tidy`
+- gRPC 코드 생성(프로토 변경 시): `protoc --go_out=. --go-grpc_out=. proto/queue.proto`
 
 ## 설정 (`config.yml`)
 
@@ -68,10 +73,20 @@ debug: false           # true면 내장 프로듀서/컨슈머/모니터 실행
 http:
   enabled: true        # HTTP API 활성화
   port: 8080           # 포트 (기본 8080)
+  rate:                # 전역 IP 기반 Rate Limit (429 반환)
+    limit: 1
+    burst: 5
+  auth:
+    api_key: ${API_KEY} # writer 엔드포인트 보호용 API 키 (ENV 치환 지원)
+
+grpc:
+  enabled: true        # gRPC 서버 활성화
+  port: 50051
 ```
 
 - `file` 모드 사용 시 디렉터리 생성: `mkdir -p ./data/persistence`
 - 실제 DB 파일 경로: `./data/persistence/filedb_queue.db`
+- `.env`를 로드하며(`github.com/joho/godotenv`), `config.yml`은 환경변수 치환을 지원합니다(`$VAR`/`${VAR}`).
 
 ## 모드
 
@@ -87,7 +102,7 @@ http:
 - 헬스체크: `GET /api/v1/health`
   - 예) `curl -s localhost:8080/api/v1/health`
 
-- Enqueue: `POST /api/v1/enqueue`
+- Enqueue: `POST /api/v1/enqueue` (헤더: `X-API-Key: <키>` 필요)
   - 요청: `{ "message": <任意 JSON> }`
   - 예) `curl -X POST localhost:8080/api/v1/enqueue -H 'Content-Type: application/json' -d '{"message": {"text":"hello"}}'`
 
@@ -95,28 +110,44 @@ http:
   - 요청: `{ "group": "g1", "consumer_id": "c-1" }`
   - 응답: `{ status, message: { id, receipt, payload } }`
 
-- Ack: `POST /api/v1/ack`
+- Ack: `POST /api/v1/ack` (헤더: `X-API-Key` 필요)
   - 요청: `{ "group": "g1", "message_id": 1, "receipt": "..." }`
 
-- Nack: `POST /api/v1/nack`
+- Nack: `POST /api/v1/nack` (헤더: `X-API-Key` 필요)
   - 요청: `{ "group": "g1", "message_id": 1, "receipt": "..." }`
   - 내부적으로 백오프 + 지터가 적용되며, `max-retry` 초과 시 DLQ로 이동
 
 - Peek: `POST /api/v1/peek`
   - 요청: `{ "group": "g1" }` (할당/리스 없이 가장 앞 메시지 확인)
 
-- Renew: `POST /api/v1/renew`
+- Renew: `POST /api/v1/renew` (헤더: `X-API-Key` 필요)
   - 요청: `{ "group": "g1", "message_id": 1, "receipt": "...", "extend_sec": 5 }`
   - 현재 리스가 유효한 경우만 연장, 만료 시 409 반환
 
 - Status: `GET /api/v1/status`
   - 응답: `{ queue_status: { queue_type, total_messages, acked_messages, inflight_messages, dlq_messages } }`
 
+요청/응답 공통: 서버는 `X-Request-ID`를 반환하며, 미제공 시 자동 생성됩니다. 요청 폭주 시 429(Too Many Requests)를 반환합니다.
+
+## gRPC API
+- 활성화: `grpc.enabled: true`, 포트 기본 `50051`.
+- 헬스체크: `QueueService/HealthCheck` → `{ status: "ok" }`.
+- 주요 RPC: `Enqueue`, `Dequeue`, `Ack`, `Nack`, `Peek`, `Renew`, `Status` (proto: `proto/queue.proto`).
+- 호출 예시(grpcurl): `grpcurl -plaintext localhost:50051 list` / `grpcurl -plaintext -d '{"message":{"text":"hi"}}' localhost:50051 QueueService/Enqueue`.
+
 ## 테스트
 
 - 표준 `testing` 프레임워크 사용: `go test ./... -v`
 - 설정 로더 테스트: `internal/config_test.go`
 - 필요 시 `-cover`로 커버리지 확인
+
+## 변경 사항(요약)
+- gRPC Queue Service 추가: `internal/api/grpc/*`, `proto/queue.proto`, `grpc.enabled/port` 설정 지원.
+- HTTP 미들웨어 도입: 로깅/에러/Request-ID/인증(API 키)/Rate Limit(전역 IP 기준, 1분 단위 정리).
+- 설정 개선: `.env` 로드 및 `config.yml` 환경변수 치환 지원, 레이트 리밋/인증/GRPC 섹션 추가.
+- JSON 필드 표준화 및 에러 처리 개선, 서버 종료 시 graceful shutdown 보장.
+- HTTP 구조 리팩터링: server/handler/dto 파일 분리.
+- 문서: 기여자 가이드 `AGENTS.md` 추가.
 
 ## 보안/운영 팁
 
