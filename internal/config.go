@@ -30,6 +30,11 @@ type Config struct {
 			APIKey string `yaml:"api_key"`
 		} `yaml:"auth"`
 	} `yaml:"http"`
+
+	GRPC struct {
+		Enabled bool `yaml:"enabled"`
+		Port    int  `yaml:"port"`
+	} `yaml:"grpc"`
 }
 
 func ReadConfig(filePath string) (*Config, error) {
