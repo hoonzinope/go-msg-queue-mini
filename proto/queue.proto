@@ -71,8 +71,8 @@ message DequeueRequest {
 // HTTP: DequeueMessage{ payload, receipt, id }
 message DequeueMessage {
   bytes payload = 1;
-  string receipt = 3;
-  int64  id = 4;
+  string receipt = 2;
+  int64  id = 3;
 }
 
 // HTTP: DequeueResponse{ status, message }

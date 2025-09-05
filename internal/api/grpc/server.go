@@ -2,6 +2,7 @@ package grpc
 
 import (
 	context "context"
+	"encoding/json"
 	"fmt"
 	"go-msg-queue-mini/internal"
 	"net"
@@ -58,9 +59,9 @@ func (qs *queueServiceServer) Dequeue(ctx context.Context, req *DequeueRequest) 
 	if err != nil {
 		return nil, err
 	}
-	payload, ok := message.Payload.([]byte)
-	if !ok {
-		return nil, fmt.Errorf("failed to cast payload to []byte")
+	payload, err := json.Marshal(message.Payload)
+	if err != nil {
+		return nil, fmt.Errorf("failed to cast payload to []byte: %v", err)
 	}
 
 	DequeueMessage := &DequeueMessage{
@@ -97,9 +98,9 @@ func (qs *queueServiceServer) Peek(ctx context.Context, req *PeekRequest) (res *
 	if err != nil {
 		return nil, err
 	}
-	payload, ok := message.Payload.([]byte)
-	if !ok {
-		return nil, fmt.Errorf("failed to cast payload to []byte")
+	payload, err := json.Marshal(message.Payload)
+	if err != nil {
+		return nil, fmt.Errorf("failed to cast payload to []byte: %v", err)
 	}
 	dequeueMessage := &DequeueMessage{
 		Id:      message.ID,
