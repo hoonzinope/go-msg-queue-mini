@@ -21,7 +21,24 @@ func StartServer(ctx context.Context, config *internal.Config, queue internal.Qu
 	if err != nil {
 		return err
 	}
-	grpcServer := grpc.NewServer()
+	protectedMethods := map[string]bool{
+		"/QueueService/Enqueue": true,
+		"/QueueService/Dequeue": true,
+		"/QueueService/Ack":     true,
+		"/QueueService/Nack":    true,
+		"/QueueService/Peek":    false,
+		"/QueueService/Renew":   true,
+		"/QueueService/Status":  false,
+		"/QueueService/HealthCheck": false,
+	}
+	grpcServer := grpc.NewServer(
+		grpc.ChainUnaryInterceptor(
+			LoggerInterceptor,
+			ErrorInterceptor,
+			AuthInterceptor(config.GRPC.Auth.APIKey, protectedMethods),
+			RecoveryInterceptor,
+		),
+	)
 	queueService := NewQueueServiceServer(queue)
 	RegisterQueueServiceServer(grpcServer, queueService)
 
