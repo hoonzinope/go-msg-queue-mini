@@ -1,8 +1,12 @@
 package metrics
 
 import (
+	"sync"
+
 	"github.com/prometheus/client_golang/prometheus"
 )
+
+var registerOnce sync.Once
 
 type MQMetrics struct {
 	EnqueueCounter   *prometheus.CounterVec
@@ -71,14 +75,16 @@ func NewMQMetrics() *MQMetrics {
 }
 
 func (mqm *MQMetrics) MustRegisterMetrics() {
-	prometheus.MustRegister(mqm.EnqueueCounter)
-	prometheus.MustRegister(mqm.DequeueCounter)
-	prometheus.MustRegister(mqm.AckCounter)
-	prometheus.MustRegister(mqm.NackCounter)
-	prometheus.MustRegister(mqm.TotalMessages)
-	prometheus.MustRegister(mqm.InFlightMessages)
-	prometheus.MustRegister(mqm.DLQMessages)
-
+	registerOnce.Do(func() {
+		prometheus.MustRegister(mqm.EnqueueCounter)
+		prometheus.MustRegister(mqm.DequeueCounter)
+		prometheus.MustRegister(mqm.AckCounter)
+		prometheus.MustRegister(mqm.NackCounter)
+		prometheus.MustRegister(mqm.TotalMessages)
+		prometheus.MustRegister(mqm.InFlightMessages)
+		prometheus.MustRegister(mqm.DLQMessages)
+	})
+	// Initialize metrics with zero values for the "default" queue
 	mqm.EnqueueCounter.WithLabelValues("default").Add(0)
 	mqm.DequeueCounter.WithLabelValues("default").Add(0)
 	mqm.AckCounter.WithLabelValues("default").Add(0)

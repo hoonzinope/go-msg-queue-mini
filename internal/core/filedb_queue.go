@@ -12,6 +12,7 @@ import (
 )
 
 type fileDBQueue struct {
+	queueName      string
 	manager        *FileDBManager
 	mu             sync.Mutex
 	groupLock      map[string]*sync.Mutex
@@ -20,6 +21,7 @@ type fileDBQueue struct {
 	leaseDuration  time.Duration
 	MQMetrics      *metrics.MQMetrics
 	stopStatusChan chan struct{}
+	registerOnce   sync.Once
 }
 
 func NewFileDBQueue(config *internal.Config) (*fileDBQueue, error) {
@@ -45,6 +47,7 @@ func NewFileDBQueue(config *internal.Config) (*fileDBQueue, error) {
 		return nil, err
 	}
 	fq := &fileDBQueue{
+		queueName:      "default",
 		manager:        manager,
 		groupLock:      map[string]*sync.Mutex{},
 		maxRetry:       config.MaxRetry,
@@ -81,7 +84,7 @@ func (q *fileDBQueue) Enqueue(item interface{}) error {
 		fmt.Println("Error writing message to queue:", err)
 		return err
 	}
-	q.MQMetrics.EnqueueCounter.WithLabelValues("default").Inc()
+	q.MQMetrics.EnqueueCounter.WithLabelValues(q.queueName).Inc()
 	return nil
 }
 
@@ -124,7 +127,7 @@ func (q *fileDBQueue) Dequeue(consumer_group string, consumer_id string) (intern
 	queueMessage.ID = msg.ID
 	queueMessage.Receipt = msg.Receipt
 
-	q.MQMetrics.DequeueCounter.WithLabelValues("default").Inc()
+	q.MQMetrics.DequeueCounter.WithLabelValues(q.queueName).Inc()
 	return queueMessage, nil
 }
 
@@ -133,7 +136,7 @@ func (q *fileDBQueue) Ack(consumer_group string, msg_id int64, receipt string) e
 		util.Error(fmt.Sprintf("Error acknowledging message: %v", err))
 		return err
 	}
-	q.MQMetrics.AckCounter.WithLabelValues("default").Inc()
+	q.MQMetrics.AckCounter.WithLabelValues(q.queueName).Inc()
 	return nil
 }
 
@@ -144,12 +147,14 @@ func (q *fileDBQueue) Nack(consumer_group string, msg_id int64, receipt string) 
 		util.Error(fmt.Sprintf("Error not acknowledging message: %v", err))
 		return err
 	}
-	q.MQMetrics.NackCounter.WithLabelValues("default").Inc()
+	q.MQMetrics.NackCounter.WithLabelValues(q.queueName).Inc()
 	return nil
 }
 
 func (q *fileDBQueue) Shutdown() error {
-	close(q.stopStatusChan)
+	q.registerOnce.Do(func() {
+		close(q.stopStatusChan)
+	})
 	if err := q.manager.Close(); err != nil {
 		util.Error(fmt.Sprintf("Error shutting down queue: %v", err))
 		return err
@@ -204,7 +209,7 @@ func (q *fileDBQueue) statusMetrics() {
 	if err != nil {
 		util.Error(fmt.Sprintf("Error getting queue status: %v", err))
 	}
-	q.MQMetrics.TotalMessages.WithLabelValues("default").Set(float64(status.TotalMessages))
-	q.MQMetrics.InFlightMessages.WithLabelValues("default").Set(float64(status.InflightMessages))
-	q.MQMetrics.DLQMessages.WithLabelValues("default").Set(float64(status.DLQMessages))
+	q.MQMetrics.TotalMessages.WithLabelValues(q.queueName).Set(float64(status.TotalMessages))
+	q.MQMetrics.InFlightMessages.WithLabelValues(q.queueName).Set(float64(status.InflightMessages))
+	q.MQMetrics.DLQMessages.WithLabelValues(q.queueName).Set(float64(status.DLQMessages))
 }
