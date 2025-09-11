@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"golang.org/x/time/rate"
 )
 
@@ -27,9 +28,9 @@ type RateLimiter struct {
 }
 
 type httpServerInstance struct {
-	Addr  string
-	Queue internal.Queue
-	ApiKey string
+	Addr    string
+	Queue   internal.Queue
+	ApiKey  string
 	limiter RateLimiter
 }
 
@@ -48,9 +49,9 @@ func StartServer(ctx context.Context, config *internal.Config, queue internal.Qu
 	}
 
 	httpServerInstance := &httpServerInstance{
-		Addr:  fmt.Sprintf(":%d", addr),
-		Queue: queue,
-		ApiKey: config.HTTP.Auth.APIKey,
+		Addr:    fmt.Sprintf(":%d", addr),
+		Queue:   queue,
+		ApiKey:  config.HTTP.Auth.APIKey,
 		limiter: rateLimiter,
 	}
 
@@ -83,13 +84,15 @@ func router(httpServerInstance *httpServerInstance) *gin.Engine {
 	r.Use(RequestIDMiddleware())
 	r.Use(RateLimitMiddleware(httpServerInstance.limiter, 1))
 
+	r.GET("/metrics", gin.WrapH(promhttp.Handler()))
+
 	reader := r.Group("/api/v1")
 	{
 		reader.GET("/health", healthCheckHandler)
 		reader.GET("/status", httpServerInstance.statusHandler)
 		reader.POST("/peek", httpServerInstance.peekHandler)
 	}
-	
+
 	writer := r.Group("/api/v1")
 	writer.Use(AuthMiddleware(httpServerInstance.ApiKey))
 	{

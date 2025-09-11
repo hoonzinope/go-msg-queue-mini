@@ -15,7 +15,7 @@ const (
 	apiKeyHeader = "x-api-key"
 )
 
-//logging
+// logging
 func LoggerInterceptor(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
 	start := time.Now()
 
