@@ -85,16 +85,18 @@ func router(httpServerInstance *httpServerInstance) *gin.Engine {
 	r.Use(RateLimitMiddleware(httpServerInstance.limiter, 1))
 
 	r.GET("/metrics", gin.WrapH(promhttp.Handler()))
+	r.GET("/health", healthCheckHandler)
 
 	reader := r.Group("/api/v1")
+	reader.Use(queueNameMiddleware())
 	{
-		reader.GET("/health", healthCheckHandler)
 		reader.GET("/:queue_name/status", httpServerInstance.statusHandler)
 		reader.POST("/:queue_name/peek", httpServerInstance.peekHandler)
 	}
 
 	writer := r.Group("/api/v1")
 	writer.Use(AuthMiddleware(httpServerInstance.ApiKey))
+	writer.Use(queueNameMiddleware())
 	{
 		writer.POST("/:queue_name/create", httpServerInstance.createQueueHandler)
 		writer.DELETE("/:queue_name/delete", httpServerInstance.deleteQueueHandler)

@@ -43,13 +43,13 @@ func main() {
 		QueueName: "default",
 	}
 	if config.Debug {
-		var group_name string = "default"
+		var groupName string = "default"
 		err := client.Queue.CreateQueue(client.QueueName)
 		if err != nil {
 			util.Error(fmt.Sprintf("Error creating queue: %v", err))
 			return
 		}
-		debugMode(&wg, ctx, client, group_name)
+		debugMode(&wg, ctx, client, groupName)
 	} else {
 		if config.HTTP.Enabled {
 			wg.Add(1)
@@ -111,48 +111,31 @@ func buildQueue(config *internal.Config) (internal.Queue, error) {
 	}
 }
 
-func debugMode(wg *sync.WaitGroup, ctx context.Context, client *client.QueueClient, group_name string) {
+func debugMode(wg *sync.WaitGroup, ctx context.Context, client *client.QueueClient, groupName string) {
 	util.Info("Debug mode is enabled")
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		producer := runner.Producer{
-			Name:   "producer_1",
-			Client: client,
-		}
-		producer.Produce(ctx)
-	}()
+	for i := 0; i < 1; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			producer := runner.Producer{
+				Name:   fmt.Sprintf("producer_%d", i),
+				Client: client,
+			}
+			producer.Produce(ctx)
+		}(i)
+	}
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		producer := runner.Producer{
-			Name:   "producer_2",
-			Client: client,
-		}
-		producer.Produce(ctx)
-	}()
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		consumer := runner.Consumer{
-			Name:   "consumer_1",
-			Group:  group_name,
-			Client: client,
-		}
-		consumer.Consume(ctx)
-	}()
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		consumer := runner.Consumer{
-			Name:   "consumer_2",
-			Group:  group_name,
-			Client: client,
-		}
-		consumer.Consume(ctx)
-	}()
+	for i := 0; i < 1; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			consumer := runner.Consumer{
+				Name:   fmt.Sprintf("consumer_%d", i),
+				Group:  groupName,
+				Client: client,
+			}
+			consumer.Consume(ctx)
+		}(i)
+	}
 }

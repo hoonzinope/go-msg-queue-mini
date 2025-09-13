@@ -28,24 +28,24 @@ func (qc *QueueClient) Produce(item interface{}) error {
 }
 
 func (qc *QueueClient) Consume(groupName string, consumerID string, processFunc func(item interface{}) error) error {
-	// TODO : implement Dequeue logic
-	message, err := qc.Queue.Dequeue(qc.QueueName, groupName, consumerID)
-	if err != nil {
-		return err
-	}
-	if err := processFunc(message.Payload); err != nil {
-		err := qc.Queue.Nack(qc.QueueName, groupName, message.ID, message.Receipt)
-		if err != nil {
-			return err
-		}
-		util.Error(fmt.Sprintf("%s Processing error, message %s NACKed", consumerID, message.Payload))
-	} else {
-		err := qc.Queue.Ack(qc.QueueName, groupName, message.ID, message.Receipt)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
+    // TODO : implement Dequeue logic
+    message, err := qc.Queue.Dequeue(qc.QueueName, groupName, consumerID)
+    if err != nil {
+        return err
+    }
+    // Process the message. On error, NACK and do NOT ACK.
+    if err := processFunc(message.Payload); err != nil {
+        if nackErr := qc.Queue.Nack(qc.QueueName, groupName, message.ID, message.Receipt); nackErr != nil {
+            return nackErr
+        }
+        util.Error(fmt.Sprintf("%s Processing error, message %v NACKed", consumerID, message.Payload))
+        return nil
+    }
+    // Only ACK when processing succeeds.
+    if ackErr := qc.Queue.Ack(qc.QueueName, groupName, message.ID, message.Receipt); ackErr != nil {
+        return ackErr
+    }
+    return nil
 }
 
 func (qc *QueueClient) Shutdown() error {

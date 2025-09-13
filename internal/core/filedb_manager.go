@@ -4,7 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"go-msg-queue-mini/internal"
-	"go-msg-queue-mini/internal/queue_error"
+	queue_error "go-msg-queue-mini/internal/queue_error"
 	"sync"
 	"time"
 
@@ -524,14 +524,16 @@ func (m *FileDBManager) ReadMessageWithMeta(queue_name, group string, partitionI
 	}
 	// 3) 내가 점유한 메시지 반환 (consumer_id로 한정)
 	var msg queueMsg
+	msg.QueueName = queue_name
 	err = tx.QueryRow(`
 		SELECT 
-			(select name from queue_info where id = q.queue_info_id) as queue_name, 
 		q.id, q.msg, q.insert_ts, i.receipt, q.global_id, q.partition_id
 		FROM queue q
 		JOIN inflight i ON 
 			i.q_id = q.id AND
 			i.queue_info_id = q.queue_info_id
+		JOIN queue_info qi ON
+			qi.id = q.queue_info_id
 		WHERE 
 			i.queue_info_id = ? 
 			AND i.group_name = ? 
@@ -540,7 +542,7 @@ func (m *FileDBManager) ReadMessageWithMeta(queue_name, group string, partitionI
 		ORDER BY i.claimed_at DESC
 		LIMIT 1
 	`, queueInfoID, group, consumerID, partitionID).Scan(
-		&msg.QueueName, &msg.ID, &msg.Msg, &msg.InsertTS, &msg.Receipt, &msg.GlobalID, &msg.PartitionID)
+		&msg.ID, &msg.Msg, &msg.InsertTS, &msg.Receipt, &msg.GlobalID, &msg.PartitionID)
 	if err != nil {
 		return queueMsg{}, err
 	}
@@ -635,7 +637,7 @@ func (m *FileDBManager) NackMessageWithMeta(queue_name, group string, partitionI
 		backoffSec = 1
 	} // clamp
 	jitter := util.GenerateJitter(backoffSec)
-	backoffSec = backoffSec*(1<<(retryCount-1)) + jitter // 첫 호출 기준
+	backoffSec = backoffSec*(1<<(retryCount-1)) + jitter // 첫 호출 기준 2^(n-1)
 	if backoffSec > 86400 {
 		backoffSec = 86400
 	}
@@ -756,15 +758,18 @@ func (m *FileDBManager) PeekMessageWithMeta(queue_name, group string, partitionI
 		}
 	}()
 	var msg queueMsg
+	msg.QueueName = queue_name
 	// Implement the logic to peek a message from the queue
 	err = tx.QueryRow(`
-		SELECT (select name from queue_info where id = q.queue_info_id) as queue_name, 
+		SELECT 
 		q.id, q.msg, q.insert_ts, "" as receipt, q.global_id, q.partition_id
 		FROM queue q
 		LEFT JOIN acked a   
 			ON a.queue_info_id = q.queue_info_id AND a.global_id = q.global_id AND a.group_name = ? AND a.partition_id = ?
 		LEFT JOIN inflight i 
 			ON i.queue_info_id = q.queue_info_id AND i.q_id = q.id AND i.group_name = ? AND i.partition_id = ?
+		JOIN queue_info qi ON
+			qi.id = q.queue_info_id
 		WHERE
 		  q.queue_info_id = ?  
 		  AND a.global_id IS NULL
@@ -774,7 +779,7 @@ func (m *FileDBManager) PeekMessageWithMeta(queue_name, group string, partitionI
 		LIMIT 1
 	`, group, partitionID,
 		group, partitionID,
-		queueInfoID, partitionID).Scan(&msg.QueueName, &msg.ID, &msg.Msg, &msg.InsertTS, &msg.Receipt, &msg.GlobalID, &msg.PartitionID)
+		queueInfoID, partitionID).Scan(&msg.ID, &msg.Msg, &msg.InsertTS, &msg.Receipt, &msg.GlobalID, &msg.PartitionID)
 	if err == sql.ErrNoRows {
 		return queueMsg{}, queue_error.ErrEmpty
 	}

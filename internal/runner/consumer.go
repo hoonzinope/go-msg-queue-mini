@@ -30,7 +30,7 @@ func (c *Consumer) Consume(ctx context.Context) {
 func (c *Consumer) consume() {
 	err := c.Client.Consume(c.Group, c.Name, func(item interface{}) error {
 		// Simulate message processing
-		processTime := util.GenerateNumber(1, 5)
+		processTime := util.GenerateNumber(1, 2)
 		time.Sleep(time.Duration(processTime) * time.Second)
 		// Randomly simulate processing failure
 		if util.GenerateNumber(1, 10) > 8 {

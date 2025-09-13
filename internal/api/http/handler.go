@@ -14,11 +14,19 @@ func healthCheckHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 
+func getQueueName(c *gin.Context) (string, error) {
+	queue_name, ok := c.Get("queue_name")
+	if !ok {
+		return "", errors.New("queue name is required")
+	}
+	return queue_name.(string), nil
+}
+
 func (h *httpServerInstance) createQueueHandler(c *gin.Context) {
-	var queue_name = c.Param("queue_name")
-	if queue_name == "" {
-		util.Error("Queue name is required")
-		c.JSON(http.StatusBadRequest, gin.H{"error": "queue name is required"})
+	queue_name, queueNameErr := getQueueName(c)
+	if queueNameErr != nil {
+		util.Error(queueNameErr.Error())
+		c.JSON(http.StatusBadRequest, gin.H{"error": queueNameErr.Error()})
 		return
 	}
 	err := h.Queue.CreateQueue(queue_name)
@@ -31,10 +39,10 @@ func (h *httpServerInstance) createQueueHandler(c *gin.Context) {
 }
 
 func (h *httpServerInstance) deleteQueueHandler(c *gin.Context) {
-	var queue_name = c.Param("queue_name")
-	if queue_name == "" {
-		util.Error("Queue name is required")
-		c.JSON(http.StatusBadRequest, gin.H{"error": "queue name is required"})
+	queue_name, queueNameErr := getQueueName(c)
+	if queueNameErr != nil {
+		util.Error(queueNameErr.Error())
+		c.JSON(http.StatusBadRequest, gin.H{"error": queueNameErr.Error()})
 		return
 	}
 	err := h.Queue.DeleteQueue(queue_name)
@@ -47,12 +55,13 @@ func (h *httpServerInstance) deleteQueueHandler(c *gin.Context) {
 }
 
 func (h *httpServerInstance) enqueueHandler(c *gin.Context) {
-	var queue_name = c.Param("queue_name")
-	if queue_name == "" {
-		util.Error("Queue name is required")
-		c.JSON(http.StatusBadRequest, gin.H{"error": "queue name is required"})
+	queue_name, queueNameErr := getQueueName(c)
+	if queueNameErr != nil {
+		util.Error(queueNameErr.Error())
+		c.JSON(http.StatusBadRequest, gin.H{"error": queueNameErr.Error()})
 		return
 	}
+
 	var req EnqueueRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		util.Error(fmt.Sprintf("Error binding JSON: %v", err))
@@ -74,10 +83,10 @@ func (h *httpServerInstance) enqueueHandler(c *gin.Context) {
 }
 
 func (h *httpServerInstance) dequeueHandler(c *gin.Context) {
-	var queue_name = c.Param("queue_name")
-	if queue_name == "" {
-		util.Error("Queue name is required")
-		c.JSON(http.StatusBadRequest, gin.H{"error": "queue name is required"})
+	queue_name, queueNameErr := getQueueName(c)
+	if queueNameErr != nil {
+		util.Error(queueNameErr.Error())
+		c.JSON(http.StatusBadRequest, gin.H{"error": queueNameErr.Error()})
 		return
 	}
 	var req DequeueRequest
@@ -111,10 +120,10 @@ func (h *httpServerInstance) dequeueHandler(c *gin.Context) {
 }
 
 func (h *httpServerInstance) ackHandler(c *gin.Context) {
-	var queue_name = c.Param("queue_name")
-	if queue_name == "" {
-		util.Error("Queue name is required")
-		c.JSON(http.StatusBadRequest, gin.H{"error": "queue name is required"})
+	queue_name, queueNameErr := getQueueName(c)
+	if queueNameErr != nil {
+		util.Error(queueNameErr.Error())
+		c.JSON(http.StatusBadRequest, gin.H{"error": queueNameErr.Error()})
 		return
 	}
 	var req AckRequest
@@ -134,10 +143,10 @@ func (h *httpServerInstance) ackHandler(c *gin.Context) {
 }
 
 func (h *httpServerInstance) nackHandler(c *gin.Context) {
-	var queue_name = c.Param("queue_name")
-	if queue_name == "" {
-		util.Error("Queue name is required")
-		c.JSON(http.StatusBadRequest, gin.H{"error": "queue name is required"})
+	queue_name, queueNameErr := getQueueName(c)
+	if queueNameErr != nil {
+		util.Error(queueNameErr.Error())
+		c.JSON(http.StatusBadRequest, gin.H{"error": queueNameErr.Error()})
 		return
 	}
 	var req NackRequest
@@ -157,10 +166,10 @@ func (h *httpServerInstance) nackHandler(c *gin.Context) {
 }
 
 func (h *httpServerInstance) statusHandler(c *gin.Context) {
-	var queue_name = c.Param("queue_name")
-	if queue_name == "" {
-		util.Error("Queue name is required")
-		c.JSON(http.StatusBadRequest, gin.H{"error": "queue name is required"})
+	queue_name, queueNameErr := getQueueName(c)
+	if queueNameErr != nil {
+		util.Error(queueNameErr.Error())
+		c.JSON(http.StatusBadRequest, gin.H{"error": queueNameErr.Error()})
 		return
 	}
 	status, err := h.Queue.Status(queue_name)
@@ -183,10 +192,10 @@ func (h *httpServerInstance) statusHandler(c *gin.Context) {
 }
 
 func (h *httpServerInstance) peekHandler(c *gin.Context) {
-	var queue_name = c.Param("queue_name")
-	if queue_name == "" {
-		util.Error("Queue name is required")
-		c.JSON(http.StatusBadRequest, gin.H{"error": "queue name is required"})
+	queue_name, queueNameErr := getQueueName(c)
+	if queueNameErr != nil {
+		util.Error(queueNameErr.Error())
+		c.JSON(http.StatusBadRequest, gin.H{"error": queueNameErr.Error()})
 		return
 	}
 	var req PeekRequest
@@ -218,10 +227,10 @@ func (h *httpServerInstance) peekHandler(c *gin.Context) {
 }
 
 func (h *httpServerInstance) renewHandler(c *gin.Context) {
-	var queue_name = c.Param("queue_name")
-	if queue_name == "" {
-		util.Error("Queue name is required")
-		c.JSON(http.StatusBadRequest, gin.H{"error": "queue name is required"})
+	queue_name, queueNameErr := getQueueName(c)
+	if queueNameErr != nil {
+		util.Error(queueNameErr.Error())
+		c.JSON(http.StatusBadRequest, gin.H{"error": queueNameErr.Error()})
 		return
 	}
 	var req RenewRequest
