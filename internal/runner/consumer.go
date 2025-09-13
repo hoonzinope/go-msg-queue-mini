@@ -48,5 +48,7 @@ func (c *Consumer) consume() {
 		default:
 			util.Error(fmt.Sprintf("Error consuming item by %s: %v", c.Name, err))
 		}
+		sleepTime := util.GenerateNumber(1, 2)
+		time.Sleep(time.Duration(sleepTime) * time.Second)
 	}
 }
