@@ -3,7 +3,7 @@ package http
 import (
 	"errors"
 	"fmt"
-	"go-msg-queue-mini/internal/core"
+	"go-msg-queue-mini/internal/queue_error"
 	"go-msg-queue-mini/util"
 	"net/http"
 
@@ -14,7 +14,45 @@ func healthCheckHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 
+func (h *httpServerInstance) createQueueHandler(c *gin.Context) {
+	var queue_name = c.Param("queue_name")
+	if queue_name == "" {
+		util.Error("Queue name is required")
+		c.JSON(http.StatusBadRequest, gin.H{"error": "queue name is required"})
+		return
+	}
+	err := h.Queue.CreateQueue(queue_name)
+	if err != nil {
+		util.Error(fmt.Sprintf("Error creating queue: %v", err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create queue"})
+		return
+	}
+	c.JSON(http.StatusCreated, gin.H{"status": "created"})
+}
+
+func (h *httpServerInstance) deleteQueueHandler(c *gin.Context) {
+	var queue_name = c.Param("queue_name")
+	if queue_name == "" {
+		util.Error("Queue name is required")
+		c.JSON(http.StatusBadRequest, gin.H{"error": "queue name is required"})
+		return
+	}
+	err := h.Queue.DeleteQueue(queue_name)
+	if err != nil {
+		util.Error(fmt.Sprintf("Error deleting queue: %v", err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete queue"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"status": "deleted"})
+}
+
 func (h *httpServerInstance) enqueueHandler(c *gin.Context) {
+	var queue_name = c.Param("queue_name")
+	if queue_name == "" {
+		util.Error("Queue name is required")
+		c.JSON(http.StatusBadRequest, gin.H{"error": "queue name is required"})
+		return
+	}
 	var req EnqueueRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		util.Error(fmt.Sprintf("Error binding JSON: %v", err))
@@ -22,7 +60,7 @@ func (h *httpServerInstance) enqueueHandler(c *gin.Context) {
 		return
 	}
 
-	err := h.Queue.Enqueue(req.Message)
+	err := h.Queue.Enqueue(queue_name, req.Message)
 	if err != nil {
 		util.Error(fmt.Sprintf("Error enqueuing message: %v", err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to enqueue message"})
@@ -36,6 +74,12 @@ func (h *httpServerInstance) enqueueHandler(c *gin.Context) {
 }
 
 func (h *httpServerInstance) dequeueHandler(c *gin.Context) {
+	var queue_name = c.Param("queue_name")
+	if queue_name == "" {
+		util.Error("Queue name is required")
+		c.JSON(http.StatusBadRequest, gin.H{"error": "queue name is required"})
+		return
+	}
 	var req DequeueRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		util.Error(fmt.Sprintf("Error binding JSON: %v", err))
@@ -43,11 +87,11 @@ func (h *httpServerInstance) dequeueHandler(c *gin.Context) {
 		return
 	}
 
-	message, err := h.Queue.Dequeue(req.Group, req.ConsumerID)
+	message, err := h.Queue.Dequeue(queue_name, req.Group, req.ConsumerID)
 	if err != nil {
-		if errors.Is(err, core.ErrEmpty) {
+		if errors.Is(err, queue_error.ErrEmpty) {
 			c.Status(http.StatusNoContent)
-		} else if errors.Is(err, core.ErrContended) {
+		} else if errors.Is(err, queue_error.ErrContended) {
 			util.Error(fmt.Sprintf("Error dequeuing message: %v", err))
 			c.JSON(http.StatusConflict, gin.H{"status": "message is being processed"})
 		} else {
@@ -67,6 +111,12 @@ func (h *httpServerInstance) dequeueHandler(c *gin.Context) {
 }
 
 func (h *httpServerInstance) ackHandler(c *gin.Context) {
+	var queue_name = c.Param("queue_name")
+	if queue_name == "" {
+		util.Error("Queue name is required")
+		c.JSON(http.StatusBadRequest, gin.H{"error": "queue name is required"})
+		return
+	}
 	var req AckRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		util.Error(fmt.Sprintf("Error binding JSON: %v", err))
@@ -74,7 +124,7 @@ func (h *httpServerInstance) ackHandler(c *gin.Context) {
 		return
 	}
 
-	err := h.Queue.Ack(req.Group, req.MessageID, req.Receipt)
+	err := h.Queue.Ack(queue_name, req.Group, req.MessageID, req.Receipt)
 	if err != nil {
 		util.Error(fmt.Sprintf("Error ACKing message: %v", err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to ack message"})
@@ -84,6 +134,12 @@ func (h *httpServerInstance) ackHandler(c *gin.Context) {
 }
 
 func (h *httpServerInstance) nackHandler(c *gin.Context) {
+	var queue_name = c.Param("queue_name")
+	if queue_name == "" {
+		util.Error("Queue name is required")
+		c.JSON(http.StatusBadRequest, gin.H{"error": "queue name is required"})
+		return
+	}
 	var req NackRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		util.Error(fmt.Sprintf("Error binding JSON: %v", err))
@@ -91,7 +147,7 @@ func (h *httpServerInstance) nackHandler(c *gin.Context) {
 		return
 	}
 
-	err := h.Queue.Nack(req.Group, req.MessageID, req.Receipt)
+	err := h.Queue.Nack(queue_name, req.Group, req.MessageID, req.Receipt)
 	if err != nil {
 		util.Error(fmt.Sprintf("Error NACKing message: %v", err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to nack message"})
@@ -101,7 +157,13 @@ func (h *httpServerInstance) nackHandler(c *gin.Context) {
 }
 
 func (h *httpServerInstance) statusHandler(c *gin.Context) {
-	status, err := h.Queue.Status()
+	var queue_name = c.Param("queue_name")
+	if queue_name == "" {
+		util.Error("Queue name is required")
+		c.JSON(http.StatusBadRequest, gin.H{"error": "queue name is required"})
+		return
+	}
+	status, err := h.Queue.Status(queue_name)
 	if err != nil {
 		util.Error(fmt.Sprintf("Error getting queue status: %v", err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get queue status"})
@@ -121,6 +183,12 @@ func (h *httpServerInstance) statusHandler(c *gin.Context) {
 }
 
 func (h *httpServerInstance) peekHandler(c *gin.Context) {
+	var queue_name = c.Param("queue_name")
+	if queue_name == "" {
+		util.Error("Queue name is required")
+		c.JSON(http.StatusBadRequest, gin.H{"error": "queue name is required"})
+		return
+	}
 	var req PeekRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		util.Error(fmt.Sprintf("Error binding JSON: %v", err))
@@ -128,9 +196,9 @@ func (h *httpServerInstance) peekHandler(c *gin.Context) {
 		return
 	}
 
-	message, err := h.Queue.Peek(req.Group)
+	message, err := h.Queue.Peek(queue_name, req.Group)
 	if err != nil {
-		if errors.Is(err, core.ErrEmpty) {
+		if errors.Is(err, queue_error.ErrEmpty) {
 			c.Status(http.StatusNoContent)
 			return
 		}
@@ -150,6 +218,12 @@ func (h *httpServerInstance) peekHandler(c *gin.Context) {
 }
 
 func (h *httpServerInstance) renewHandler(c *gin.Context) {
+	var queue_name = c.Param("queue_name")
+	if queue_name == "" {
+		util.Error("Queue name is required")
+		c.JSON(http.StatusBadRequest, gin.H{"error": "queue name is required"})
+		return
+	}
 	var req RenewRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		util.Error(fmt.Sprintf("Error binding JSON: %v", err))
@@ -157,9 +231,9 @@ func (h *httpServerInstance) renewHandler(c *gin.Context) {
 		return
 	}
 
-	err := h.Queue.Renew(req.Group, req.MessageID, req.Receipt, req.ExtendSec)
+	err := h.Queue.Renew(queue_name, req.Group, req.MessageID, req.Receipt, req.ExtendSec)
 	if err != nil {
-		if errors.Is(err, core.ErrLeaseExpired) {
+		if errors.Is(err, queue_error.ErrLeaseExpired) {
 			c.JSON(http.StatusConflict, gin.H{"status": "lease expired"})
 		} else {
 			util.Error(fmt.Sprintf("Error renewing message: %v", err))

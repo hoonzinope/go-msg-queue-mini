@@ -21,14 +21,16 @@ func StartServer(ctx context.Context, config *internal.Config, queue internal.Qu
 		return err
 	}
 	protectedMethods := map[string]bool{
-		"/queue.v1.QueueService/Enqueue": 		true,
-		"/queue.v1.QueueService/Dequeue": 		true,
-		"/queue.v1.QueueService/Ack":   		true,
-		"/queue.v1.QueueService/Nack":    		true,
-		"/queue.v1.QueueService/Renew":   		true,
-		"/queue.v1.QueueService/Peek":    		false,
-		"/queue.v1.QueueService/Status":  		false,
-		"/queue.v1.QueueService/HealthCheck": 	false,
+		"/queue.v1.QueueService/CreateQueue": true,
+		"/queue.v1.QueueService/DeleteQueue": true,
+		"/queue.v1.QueueService/Enqueue":     true,
+		"/queue.v1.QueueService/Dequeue":     true,
+		"/queue.v1.QueueService/Ack":         true,
+		"/queue.v1.QueueService/Nack":        true,
+		"/queue.v1.QueueService/Renew":       true,
+		"/queue.v1.QueueService/Peek":        false,
+		"/queue.v1.QueueService/Status":      false,
+		"/queue.v1.QueueService/HealthCheck": false,
 	}
 	grpcServer := grpc.NewServer(
 		grpc.ChainUnaryInterceptor(
@@ -61,16 +63,42 @@ func (qs *queueServiceServer) HealthCheck(ctx context.Context, req *EmptyRequest
 	}, nil
 }
 
+func (qs *queueServiceServer) CreateQueue(ctx context.Context, req *CreateQueueRequest) (res *CreateQueueResponse, err error) {
+	queue_name := req.GetQueueName()
+	if queue_name == "" {
+		return nil, fmt.Errorf("queue name is required")
+	}
+	if err := qs.Queue.CreateQueue(queue_name); err != nil {
+		return nil, err
+	}
+	return &CreateQueueResponse{Status: "ok"}, nil
+}
+
+func (qs *queueServiceServer) DeleteQueue(ctx context.Context, req *DeleteQueueRequest) (res *DeleteQueueResponse, err error) {
+	queue_name := req.GetQueueName()
+	if queue_name == "" {
+		return nil, fmt.Errorf("queue name is required")
+	}
+	if err := qs.Queue.DeleteQueue(queue_name); err != nil {
+		return nil, err
+	}
+	return &DeleteQueueResponse{Status: "ok"}, nil
+}
+
 func (qs *queueServiceServer) Enqueue(ctx context.Context, req *EnqueueRequest) (res *EnqueueResponse, err error) {
+	queue_name := req.GetQueueName()
+	if queue_name == "" {
+		return nil, fmt.Errorf("queue name is required")
+	}
 	message := req.GetMessage()
-	if err := qs.Queue.Enqueue(message); err != nil {
+	if err := qs.Queue.Enqueue(queue_name, message); err != nil {
 		return nil, err
 	}
 	return &EnqueueResponse{Status: "ok", Message: message}, nil
 }
 
 func (qs *queueServiceServer) Dequeue(ctx context.Context, req *DequeueRequest) (res *DequeueResponse, err error) {
-	message, err := qs.Queue.Dequeue(req.Group, req.ConsumerId)
+	message, err := qs.Queue.Dequeue(req.QueueName, req.Group, req.ConsumerId)
 	if err != nil {
 		return nil, err
 	}
@@ -86,7 +114,7 @@ func (qs *queueServiceServer) Dequeue(ctx context.Context, req *DequeueRequest) 
 }
 
 func (qs *queueServiceServer) Ack(ctx context.Context, req *AckRequest) (res *AckResponse, err error) {
-	if err := qs.Queue.Ack(req.Group, req.MessageId, req.Receipt); err != nil {
+	if err := qs.Queue.Ack(req.QueueName, req.Group, req.MessageId, req.Receipt); err != nil {
 		return nil, err
 	}
 	return &AckResponse{
@@ -95,7 +123,7 @@ func (qs *queueServiceServer) Ack(ctx context.Context, req *AckRequest) (res *Ac
 }
 
 func (qs *queueServiceServer) Nack(ctx context.Context, req *NackRequest) (res *NackResponse, err error) {
-	if err := qs.Queue.Nack(req.Group, req.MessageId, req.Receipt); err != nil {
+	if err := qs.Queue.Nack(req.QueueName, req.Group, req.MessageId, req.Receipt); err != nil {
 		return nil, err
 	}
 	return &NackResponse{
@@ -104,7 +132,7 @@ func (qs *queueServiceServer) Nack(ctx context.Context, req *NackRequest) (res *
 }
 
 func (qs *queueServiceServer) Peek(ctx context.Context, req *PeekRequest) (res *PeekResponse, err error) {
-	message, err := qs.Queue.Peek(req.Group)
+	message, err := qs.Queue.Peek(req.QueueName, req.Group)
 	if err != nil {
 		return nil, err
 	}
@@ -120,7 +148,7 @@ func (qs *queueServiceServer) Peek(ctx context.Context, req *PeekRequest) (res *
 }
 
 func (qs *queueServiceServer) Renew(ctx context.Context, req *RenewRequest) (res *RenewResponse, err error) {
-	if err := qs.Queue.Renew(req.Group, req.MessageId, req.Receipt, int(req.ExtendSec)); err != nil {
+	if err := qs.Queue.Renew(req.QueueName, req.Group, req.MessageId, req.Receipt, int(req.ExtendSec)); err != nil {
 		return nil, err
 	}
 	return &RenewResponse{
@@ -128,21 +156,21 @@ func (qs *queueServiceServer) Renew(ctx context.Context, req *RenewRequest) (res
 	}, nil
 }
 
-func (qs *queueServiceServer) Status(ctx context.Context, req *EmptyRequest) (res *StatusResponse, err error) {
+func (qs *queueServiceServer) Status(ctx context.Context, req *StatusRequest) (res *StatusResponse, err error) {
 	// Check the status of the queue
-	status, err := qs.Queue.Status()
+	status, err := qs.Queue.Status(req.QueueName)
 	if err != nil {
 		return nil, err
 	}
 	queueStatus := &QueueStatus{
-		QueueType:   status.QueueType,
-		TotalMessages: status.TotalMessages,
-		AckedMessages: status.AckedMessages,
+		QueueName:        status.QueueName,
+		TotalMessages:    status.TotalMessages,
+		AckedMessages:    status.AckedMessages,
 		InflightMessages: status.InflightMessages,
-		DlqMessages: status.DLQMessages,
+		DlqMessages:      status.DLQMessages,
 	}
 	return &StatusResponse{
-		Status: "ok",
-		QueueStatus:  queueStatus,
+		Status:      "ok",
+		QueueStatus: queueStatus,
 	}, nil
 }
