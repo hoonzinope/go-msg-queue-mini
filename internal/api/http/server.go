@@ -85,22 +85,26 @@ func router(httpServerInstance *httpServerInstance) *gin.Engine {
 	r.Use(RateLimitMiddleware(httpServerInstance.limiter, 1))
 
 	r.GET("/metrics", gin.WrapH(promhttp.Handler()))
+	r.GET("/health", healthCheckHandler)
 
 	reader := r.Group("/api/v1")
+	reader.Use(queueNameMiddleware())
 	{
-		reader.GET("/health", healthCheckHandler)
-		reader.GET("/status", httpServerInstance.statusHandler)
-		reader.POST("/peek", httpServerInstance.peekHandler)
+		reader.GET("/:queue_name/status", httpServerInstance.statusHandler)
+		reader.POST("/:queue_name/peek", httpServerInstance.peekHandler)
 	}
 
 	writer := r.Group("/api/v1")
 	writer.Use(AuthMiddleware(httpServerInstance.ApiKey))
+	writer.Use(queueNameMiddleware())
 	{
-		writer.POST("/enqueue", httpServerInstance.enqueueHandler)
-		writer.POST("/dequeue", httpServerInstance.dequeueHandler)
-		writer.POST("/ack", httpServerInstance.ackHandler)
-		writer.POST("/nack", httpServerInstance.nackHandler)
-		writer.POST("/renew", httpServerInstance.renewHandler)
+		writer.POST("/:queue_name/create", httpServerInstance.createQueueHandler)
+		writer.DELETE("/:queue_name/delete", httpServerInstance.deleteQueueHandler)
+		writer.POST("/:queue_name/enqueue", httpServerInstance.enqueueHandler)
+		writer.POST("/:queue_name/dequeue", httpServerInstance.dequeueHandler)
+		writer.POST("/:queue_name/ack", httpServerInstance.ackHandler)
+		writer.POST("/:queue_name/nack", httpServerInstance.nackHandler)
+		writer.POST("/:queue_name/renew", httpServerInstance.renewHandler)
 	}
 	return r
 }

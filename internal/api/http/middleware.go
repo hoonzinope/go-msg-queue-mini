@@ -16,7 +16,7 @@ func LoggerMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		start := time.Now()
 		c.Next()
-		
+
 		latency := time.Since(start)
 		requestID := c.GetHeader("X-Request-ID")
 		log.Printf(
@@ -39,7 +39,7 @@ func ErrorHandlingMiddleware() gin.HandlerFunc {
 			err := c.Errors.Last().Err
 			log.Printf("[Error] %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		}else {
+		} else {
 			switch c.Writer.Status() {
 			case http.StatusNotFound:
 				c.JSON(http.StatusNotFound, gin.H{"error": "Resource not found"})
@@ -86,7 +86,7 @@ func RateLimitMiddleware(limiter RateLimiter, limit int) gin.HandlerFunc {
 			limit := limiter.limit
 			burst := limiter.burst
 			client_limiter = &ClientLimiter{
-				limiter: rate.NewLimiter(rate.Limit(limit), burst),
+				limiter:  rate.NewLimiter(rate.Limit(limit), burst),
 				lastSeen: time.Now(),
 			}
 			limiter.clients[clientIP] = client_limiter
@@ -100,6 +100,19 @@ func RateLimitMiddleware(limiter RateLimiter, limit int) gin.HandlerFunc {
 			c.Abort()
 			return
 		}
+		c.Next()
+	}
+}
+
+func queueNameMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		queue_name := c.Param("queue_name")
+		if queue_name == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Queue name is required"})
+			c.Abort()
+			return
+		}
+		c.Set("queue_name", queue_name)
 		c.Next()
 	}
 }

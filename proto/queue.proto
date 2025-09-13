@@ -16,6 +16,12 @@ service QueueService {
   // Health check (HTTP의 /health 대체)
   rpc HealthCheck(EmptyRequest) returns (HealthResponse);
 
+  // Create Queue : 큐 생성
+  rpc CreateQueue(CreateQueueRequest) returns (CreateQueueResponse);
+
+  // Delete Queue : 큐 삭제
+  rpc DeleteQueue(DeleteQueueRequest) returns (DeleteQueueResponse);
+
   // Enqueue: 메시지를 큐에 적재
   rpc Enqueue(EnqueueRequest) returns (EnqueueResponse);
 
@@ -37,7 +43,7 @@ service QueueService {
   rpc Renew(RenewRequest) returns (RenewResponse);
 
   // Status: 큐 상태 조회
-  rpc Status(EmptyRequest) returns (StatusResponse);
+  rpc Status(StatusRequest) returns (StatusResponse);
 }
 
 // -----------------------------------------------------------------------------
@@ -51,21 +57,44 @@ message HealthResponse {
   string status = 1; // "ok" 등 단순 응답
 }
 
+// CreateQueueRequest
+message CreateQueueRequest {
+  string queue_name = 1;
+}
+
+// CreateQueueResponse
+message CreateQueueResponse {
+  string status = 1; // e.g., "success"
+}
+
+// DeleteQueueRequest
+message DeleteQueueRequest {
+  string queue_name = 1;
+}
+
+// DeleteQueueResponse
+message DeleteQueueResponse {
+  string status = 1; // e.g., "success"
+}
+
 // HTTP: EnqueueRequest{ message json.RawMessage }
 message EnqueueRequest {
-  string message = 1;
+  string queue_name = 1;
+  string message = 2;
 }
 
 // HTTP: EnqueueResponse{ status, message }
 message EnqueueResponse {
   string status = 1;           // e.g., "enqueued"
-  string  message = 2;          // 원본 페이로드 에코백
+  string queue_name = 2;
+  string  message = 3;          // 원본 페이로드 에코백
 }
 
 // HTTP: DequeueRequest{ group, consumer_id }
 message DequeueRequest {
-  string group = 1;
-  string consumer_id = 2;
+  string queue_name = 1;
+  string group = 2;
+  string consumer_id = 3;
 }
 
 // HTTP: DequeueMessage{ payload, receipt, id }
@@ -83,9 +112,10 @@ message DequeueResponse {
 
 // HTTP: AckRequest{ group, message_id, receipt }
 message AckRequest {
-  string group = 1;
-  int64  message_id = 2;
-  string receipt = 3;
+  string queue_name = 1;
+  string group = 2;
+  int64  message_id = 3;
+  string receipt = 4;
 }
 message AckResponse {
   string status = 1; // "ack ok"
@@ -93,9 +123,10 @@ message AckResponse {
 
 // HTTP: NackRequest{ group, message_id, receipt }
 message NackRequest {
-  string group = 1;
-  int64  message_id = 2;
-  string receipt = 3;
+  string queue_name = 1;
+  string group = 2;
+  int64  message_id = 3;
+  string receipt = 4;
 }
 message NackResponse {
   string status = 1; // "nack ok"
@@ -103,7 +134,8 @@ message NackResponse {
 
 // HTTP: PeekRequest{ group }
 message PeekRequest {
-  string group = 1;
+  string queue_name = 1;
+  string group = 2;
 }
 
 // HTTP: PeekResponse{ status, message }
@@ -114,13 +146,18 @@ message PeekResponse {
 
 // HTTP: RenewRequest{ group, message_id, receipt, extend_sec }
 message RenewRequest {
-  string group = 1;
-  int64  message_id = 2;
-  string receipt = 3;
-  int32  extend_sec = 4;
+  string queue_name = 1;
+  string group = 2;
+  int64  message_id = 3;
+  string receipt = 4;
+  int32  extend_sec = 5;
 }
 message RenewResponse {
   string status = 1; // "renewed"
+}
+
+message StatusRequest{
+  string queue_name = 1;
 }
 
 // HTTP: StatusResponse{ status, queue_status }
@@ -129,9 +166,9 @@ message StatusResponse {
   QueueStatus queue_status = 2;
 }
 
-// HTTP: QueueStatus{ queue_type, total_messages, acked_messages, inflight_messages, dlq_messages }
+// HTTP: QueueStatus{ queue_name, total_messages, acked_messages, inflight_messages, dlq_messages }
 message QueueStatus {
-  string queue_type = 1;
+  string queue_name = 1;
   int64  total_messages = 2;
   int64  acked_messages = 3;
   int64  inflight_messages = 4;

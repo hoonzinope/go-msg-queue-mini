@@ -6,9 +6,9 @@ persistence:
   type : memory # Use in-memory persistence for simplicity
 
 max-retry: 3 # Maximum number of retries for message processing
-retry-interval: 30s # Interval between retries
-lease-duration: 3s # Duration for message lease
-debug: false # Enable debug mode
+retry-interval: 1s # Interval between retries
+lease-duration: 30s # Duration for message lease
+debug: true # Enable debug mode
 
 http:
   enabled: true
