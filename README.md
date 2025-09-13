@@ -18,10 +18,15 @@
 
 ```
 .
-├── main.go                      # 엔트리포인트: debug/HTTP 모드 선택
+├── cmd/
+│   └── main.go                  # 엔트리포인트: debug/HTTP/gRPC 선택
+├── client/
+│   └── client.go                # 내장 클라이언트 래퍼
 ├── config.yml                   # 런타임 및 영속성 설정
 ├── go.mod / go.sum
 ├── README.md / README.en.md
+├── proto/
+│   └── queue.proto             # gRPC 프로토 정의
 ├── internal/
 │   ├── queue.go                 # 큐 인터페이스 및 상태 타입
 │   ├── config.go                # YAML 설정 로더
@@ -38,6 +43,7 @@
 │   ├── core/
 │   │   ├── filedb_queue.go      # 큐 어댑터 (Queue 구현)
 │   │   └── filedb_manager.go    # SQLite 엔진 (Ack/Nack, DLQ, 리스, 정리 작업)
+│   ├── metrics/                 # 프로메테우스 메트릭
 │   └── runner/
 │       ├── producer.go          # 디버그 모드용 프로듀서
 │       ├── consumer.go          # 디버그 모드용 컨슈머
@@ -50,7 +56,7 @@
 
 ## 빌드/실행/개발
 
-- 실행: `go run main.go`
+- 실행: `go run cmd/main.go` (또는 `go run ./cmd`)
 - 빌드: `go build -o bin/go-msg-queue-mini ./...`
 - 테스트: `go test ./... -v` (커버리지: `-cover`)
 - 포맷/린트: `go fmt ./...` / `go vet ./...` / `go mod tidy`
@@ -94,7 +100,7 @@ grpc:
 ## 모드
 
 - `debug: true`
-  - 내부 프로듀서 2개/컨슈머 2개와 상태 모니터가 함께 실행됩니다.
+  - 내부 프로듀서/컨슈머와 상태 모니터가 함께 실행됩니다.
   - 콘솔에서 생산/소비/상태 로그를 관찰할 수 있습니다.
 
 - `debug: false` + `http.enabled: true`
@@ -102,41 +108,42 @@ grpc:
 
 ## HTTP API
 
-- 헬스체크: `GET /api/v1/health`
-  - 예) `curl -s localhost:8080/api/v1/health`
+- 헬스체크: `GET /health`
+  - 예) `curl -s localhost:8080/health`
+- 메트릭: `GET /metrics` (Prometheus)
 
-- Enqueue: `POST /api/v1/enqueue` (헤더: `X-API-Key: <키>` 필요)
+- Enqueue: `POST /api/v1/:queue_name/enqueue` (헤더: `X-API-Key: <키>` 필요)
   - 요청: `{ "message": <任意 JSON> }`
-  - 예) `curl -X POST localhost:8080/api/v1/enqueue -H 'Content-Type: application/json' -d '{"message": {"text":"hello"}}'`
+  - 예) `curl -X POST localhost:8080/api/v1/default/enqueue -H 'Content-Type: application/json' -H 'X-API-Key: $API_KEY' -d '{"message": {"text":"hello"}}'`
 
-- Dequeue: `POST /api/v1/dequeue`
+- Dequeue: `POST /api/v1/:queue_name/dequeue` (헤더: `X-API-Key: <키>` 필요)
   - 요청: `{ "group": "g1", "consumer_id": "c-1" }`
   - 응답: `{ status, message: { id, receipt, payload } }`
 
-- Ack: `POST /api/v1/ack` (헤더: `X-API-Key` 필요)
+- Ack: `POST /api/v1/:queue_name/ack` (헤더: `X-API-Key` 필요)
   - 요청: `{ "group": "g1", "message_id": 1, "receipt": "..." }`
 
-- Nack: `POST /api/v1/nack` (헤더: `X-API-Key` 필요)
+- Nack: `POST /api/v1/:queue_name/nack` (헤더: `X-API-Key` 필요)
   - 요청: `{ "group": "g1", "message_id": 1, "receipt": "..." }`
   - 내부적으로 백오프 + 지터가 적용되며, `max-retry` 초과 시 DLQ로 이동
 
-- Peek: `POST /api/v1/peek`
+- Peek: `POST /api/v1/:queue_name/peek`
   - 요청: `{ "group": "g1" }` (할당/리스 없이 가장 앞 메시지 확인)
 
-- Renew: `POST /api/v1/renew` (헤더: `X-API-Key` 필요)
+- Renew: `POST /api/v1/:queue_name/renew` (헤더: `X-API-Key` 필요)
   - 요청: `{ "group": "g1", "message_id": 1, "receipt": "...", "extend_sec": 5 }`
   - 현재 리스가 유효한 경우만 연장, 만료 시 409 반환
 
-- Status: `GET /api/v1/status`
+- Status: `GET /api/v1/:queue_name/status`
   - 응답: `{ queue_status: { queue_type, total_messages, acked_messages, inflight_messages, dlq_messages } }`
 
 요청/응답 공통: 서버는 `X-Request-ID`를 반환하며, 미제공 시 자동 생성됩니다. 요청 폭주 시 429(Too Many Requests)를 반환합니다.
 
 ## gRPC API
 - 활성화: `grpc.enabled: true`, 포트 기본 `50051`.
-- 헬스체크: `QueueService/HealthCheck` → `{ status: "ok" }`.
+- 헬스체크: `queue.v1.QueueService/HealthCheck` → `{ status: "ok" }`.
 - 주요 RPC: `Enqueue`, `Dequeue`, `Ack`, `Nack`, `Peek`, `Renew`, `Status` (proto: `proto/queue.proto`).
-- 호출 예시(grpcurl): `grpcurl -plaintext localhost:50051 list` / `grpcurl -plaintext -d '{"message":{"text":"hi"}}' localhost:50051 QueueService/Enqueue`.
+- 호출 예시(grpcurl): `grpcurl -plaintext localhost:50051 list` / `grpcurl -plaintext -d '{"queue_name":"default","message":"hi"}' localhost:50051 queue.v1.QueueService/Enqueue`.
 
 ## gRPC 인터셉터
 - 로깅: `LoggerInterceptor`가 호출 메서드/소요시간을 기록합니다.
@@ -150,7 +157,7 @@ grpc:
 
 예시(grpcurl)
 - 공개 RPC 호출: `grpcurl -plaintext localhost:50051 queue.v1.QueueService/HealthCheck`
-- 보호 RPC 호출: `grpcurl -plaintext -H 'x-api-key: $API_KEY' -d '{"message":{"text":"hello"}}' localhost:50051 queue.v1.QueueService/Enqueue`
+- 보호 RPC 호출: `grpcurl -plaintext -H 'x-api-key: $API_KEY' -d '{"queue_name":"default","message":"hello"}' localhost:50051 queue.v1.QueueService/Enqueue`
 
 ## 테스트
 

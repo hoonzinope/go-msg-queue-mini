@@ -18,10 +18,15 @@ A compact yet robust Go-based message queue. It supports Producer/Consumer runti
 
 ```
 .
-├── main.go                      # Entrypoint: choose debug/HTTP/gRPC
+├── cmd/
+│   └── main.go                  # Entrypoint: choose debug/HTTP/gRPC
+├── client/
+│   └── client.go                # Built-in client wrapper
 ├── config.yml                   # Runtime and persistence config
 ├── go.mod / go.sum
 ├── README.md / README.en.md
+├── proto/
+│   └── queue.proto              # gRPC protocol definition
 ├── internal/
 │   ├── queue.go                 # Queue interface and status types
 │   ├── config.go                # YAML config loader
@@ -38,6 +43,7 @@ A compact yet robust Go-based message queue. It supports Producer/Consumer runti
 │   ├── core/
 │   │   ├── filedb_queue.go      # Queue adapter (Queue implementation)
 │   │   └── filedb_manager.go    # SQLite engine (Ack/Nack, DLQ, leases, cleanup)
+│   ├── metrics/                 # Prometheus metrics
 │   └── runner/
 │       ├── producer.go          # Debug-mode producer
 │       ├── consumer.go          # Debug-mode consumer
@@ -50,7 +56,7 @@ A compact yet robust Go-based message queue. It supports Producer/Consumer runti
 
 ## Build/Run/Dev
 
-- Run: `go run main.go`
+- Run: `go run cmd/main.go` (or `go run ./cmd`)
 - Build: `go build -o bin/go-msg-queue-mini ./...`
 - Test: `go test ./... -v` (coverage: `-cover`)
 - Format/Lint: `go fmt ./...`, `go vet ./...`, `go mod tidy`
@@ -94,7 +100,7 @@ grpc:
 ## Modes
 
 - `debug: true`
-  - Two internal producers, two consumers, and a status monitor run locally.
+  - Internal producers/consumers and a status monitor run locally.
   - Observe production/consumption/status logs in the console.
 
 - `debug: false` + `http.enabled: true`
@@ -104,43 +110,44 @@ grpc:
 
 ## HTTP API
 
-- Health: `GET /api/v1/health`
-  - Example: `curl -s localhost:8080/api/v1/health`
+- Health: `GET /health`
+  - Example: `curl -s localhost:8080/health`
+- Metrics: `GET /metrics` (Prometheus)
 
-- Enqueue: `POST /api/v1/enqueue` (header: `X-API-Key: <key>` required)
+- Enqueue: `POST /api/v1/:queue_name/enqueue` (header: `X-API-Key: <key>` required)
   - Request: `{ "message": <any JSON> }`
-  - Example: `curl -X POST localhost:8080/api/v1/enqueue -H 'Content-Type: application/json' -d '{"message": {"text":"hello"}}'`
+  - Example: `curl -X POST localhost:8080/api/v1/default/enqueue -H 'Content-Type: application/json' -H 'X-API-Key: $API_KEY' -d '{"message": {"text":"hello"}}'`
 
-- Dequeue: `POST /api/v1/dequeue`
+- Dequeue: `POST /api/v1/:queue_name/dequeue` (requires `X-API-Key`)
   - Request: `{ "group": "g1", "consumer_id": "c-1" }`
   - Response: `{ status, message: { id, receipt, payload } }`
 
-- Ack: `POST /api/v1/ack` (requires `X-API-Key`)
+- Ack: `POST /api/v1/:queue_name/ack` (requires `X-API-Key`)
   - Request: `{ "group": "g1", "message_id": 1, "receipt": "..." }`
 
-- Nack: `POST /api/v1/nack` (requires `X-API-Key`)
+- Nack: `POST /api/v1/:queue_name/nack` (requires `X-API-Key`)
   - Request: `{ "group": "g1", "message_id": 1, "receipt": "..." }`
   - Applies exponential backoff + jitter; moves to DLQ after `max-retry`.
 
-- Peek: `POST /api/v1/peek`
+- Peek: `POST /api/v1/:queue_name/peek`
   - Request: `{ "group": "g1" }` (inspect next available message without lease)
 
-- Renew: `POST /api/v1/renew` (requires `X-API-Key`)
+- Renew: `POST /api/v1/:queue_name/renew` (requires `X-API-Key`)
   - Request: `{ "group": "g1", "message_id": 1, "receipt": "...", "extend_sec": 5 }`
   - Extends only if the current lease is valid; returns 409 if expired.
 
-- Status: `GET /api/v1/status`
+- Status: `GET /api/v1/:queue_name/status`
   - Response: `{ queue_status: { queue_type, total_messages, acked_messages, inflight_messages, dlq_messages } }`
 
 Common: server returns `X-Request-ID` (auto-generated if missing). Bursts may receive 429 Too Many Requests due to rate limiting.
 
 ## gRPC API
 - Enable with `grpc.enabled: true`, default port `50051`.
-- Health: `QueueService/HealthCheck` → `{ status: "ok" }`.
+- Health: `queue.v1.QueueService/HealthCheck` → `{ status: "ok" }`.
 - Core RPCs: `Enqueue`, `Dequeue`, `Ack`, `Nack`, `Peek`, `Renew`, `Status` (proto: `proto/queue.proto`).
 - Example (grpcurl):
   - List services: `grpcurl -plaintext localhost:50051 list`
-  - Enqueue: `grpcurl -plaintext -d '{"message":{"text":"hello"}}' localhost:50051 QueueService/Enqueue`
+  - Enqueue: `grpcurl -plaintext -d '{"queue_name":"default","message":"hello"}' localhost:50051 queue.v1.QueueService/Enqueue`
 
 ## gRPC Interceptors
 - Logging: `LoggerInterceptor` logs method and latency per call.
@@ -154,7 +161,7 @@ Common: server returns `X-Request-ID` (auto-generated if missing). Bursts may re
 
 Examples (grpcurl)
 - Public RPC: `grpcurl -plaintext localhost:50051 queue.v1.QueueService/HealthCheck`
-- Protected RPC: `grpcurl -plaintext -H 'x-api-key: $API_KEY' -d '{"message":{"text":"hello"}}' localhost:50051 queue.v1.QueueService/Enqueue`
+- Protected RPC: `grpcurl -plaintext -H 'x-api-key: $API_KEY' -d '{"queue_name":"default","message":"hello"}' localhost:50051 queue.v1.QueueService/Enqueue`
 
 ## Tests
 
