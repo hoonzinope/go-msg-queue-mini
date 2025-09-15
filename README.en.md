@@ -14,6 +14,16 @@ A compact yet robust Go-based message queue. It supports Producer/Consumer runti
 - **Status**: `/status` returns totals for queue/acked/inflight/dlq
 - **Modes**: `debug` (local producers/consumers + monitor) or HTTP/gRPC server
 
+## Quick Start
+
+- Prereqs: Go 1.21+; optionally `protoc` if editing gRPC proto
+- Env: set API key, e.g. `export API_KEY=dev-key`
+- Run (debug mode): `go run cmd/main.go` (default `memory` persistence)
+- Health: `curl -s localhost:8080/health`
+- Create queue: `curl -X POST localhost:8080/api/v1/default/create -H 'X-API-Key: $API_KEY'`
+- Enqueue: `curl -X POST localhost:8080/api/v1/default/enqueue -H 'Content-Type: application/json' -H 'X-API-Key: $API_KEY' -d '{"message": {"text":"hello"}}'`
+- Dequeue: `curl -X POST localhost:8080/api/v1/default/dequeue -H 'Content-Type: application/json' -H 'X-API-Key: $API_KEY' -d '{"group":"g1","consumer_id":"c-1"}'`
+
 ## Project Structure
 
 ```
@@ -33,7 +43,7 @@ A compact yet robust Go-based message queue. It supports Producer/Consumer runti
 │   ├── config_test.go           # Config loader test
 │   ├── api/http/
 │   │   ├── server.go            # Gin HTTP server bootstrap
-│   │   ├── handler.go           # API handlers (enqueue/dequeue/ack/nack/peek/renew/status/health)
+│   │   ├── handler.go           # API handlers (create/delete/enqueue/dequeue/ack/nack/peek/renew/status/health)
 │   │   └── dto.go               # Request/response DTOs
 │   ├── api/grpc/                # gRPC server + generated pb files
 │   │   ├── server.go
@@ -68,7 +78,8 @@ A compact yet robust Go-based message queue. It supports Producer/Consumer runti
 persistence:
   # memory: in-memory SQLite (no disk writes)
   # file:   file-backed SQLite (recommended for local dev/tests)
-  type: file
+  # Example 1) default (memory):
+  type: memory
   options:
     dirs-path: ./data/persistence
 
@@ -114,13 +125,21 @@ grpc:
   - Example: `curl -s localhost:8080/health`
 - Metrics: `GET /metrics` (Prometheus)
 
+- Create Queue: `POST /api/v1/:queue_name/create` (requires `X-API-Key`)
+  - Response: `201 Created`, `{ "status": "created" }`
+
+- Delete Queue: `DELETE /api/v1/:queue_name/delete` (requires `X-API-Key`)
+  - Response: `200 OK`, `{ "status": "deleted" }`
+
 - Enqueue: `POST /api/v1/:queue_name/enqueue` (header: `X-API-Key: <key>` required)
   - Request: `{ "message": <any JSON> }`
   - Example: `curl -X POST localhost:8080/api/v1/default/enqueue -H 'Content-Type: application/json' -H 'X-API-Key: $API_KEY' -d '{"message": {"text":"hello"}}'`
 
 - Dequeue: `POST /api/v1/:queue_name/dequeue` (requires `X-API-Key`)
   - Request: `{ "group": "g1", "consumer_id": "c-1" }`
-  - Response: `{ status, message: { id, receipt, payload } }`
+  - Success: `200 OK`, `{ status, message: { id, receipt, payload } }`
+  - Empty queue: `204 No Content`
+  - Contended: `409 Conflict`, `{ "status": "message is being processed" }`
 
 - Ack: `POST /api/v1/:queue_name/ack` (requires `X-API-Key`)
   - Request: `{ "group": "g1", "message_id": 1, "receipt": "..." }`
@@ -131,6 +150,7 @@ grpc:
 
 - Peek: `POST /api/v1/:queue_name/peek`
   - Request: `{ "group": "g1" }` (inspect next available message without lease)
+  - Empty queue: `204 No Content`
 
 - Renew: `POST /api/v1/:queue_name/renew` (requires `X-API-Key`)
   - Request: `{ "group": "g1", "message_id": 1, "receipt": "...", "extend_sec": 5 }`
@@ -141,10 +161,11 @@ grpc:
 
 Common: server returns `X-Request-ID` (auto-generated if missing). Bursts may receive 429 Too Many Requests due to rate limiting.
 
-## gRPC API
+-## gRPC API
 - Enable with `grpc.enabled: true`, default port `50051`.
 - Health: `queue.v1.QueueService/HealthCheck` → `{ status: "ok" }`.
-- Core RPCs: `Enqueue`, `Dequeue`, `Ack`, `Nack`, `Peek`, `Renew`, `Status` (proto: `proto/queue.proto`).
+- Core RPCs: `CreateQueue`, `DeleteQueue`, `Enqueue`, `Dequeue`, `Ack`, `Nack`, `Peek`, `Renew`, `Status` (proto: `proto/queue.proto`).
+- Message type: gRPC `message` is a string; HTTP supports arbitrary JSON payloads.
 - Example (grpcurl):
   - List services: `grpcurl -plaintext localhost:50051 list`
   - Enqueue: `grpcurl -plaintext -d '{"queue_name":"default","message":"hello"}' localhost:50051 queue.v1.QueueService/Enqueue`
@@ -154,7 +175,7 @@ Common: server returns `X-Request-ID` (auto-generated if missing). Bursts may re
 - Error log: `ErrorInterceptor` logs handler errors.
 - Recovery: `RecoveryInterceptor` converts panics to `codes.Internal`.
 - Auth: `AuthInterceptor(apiKey, protectedMethods)` enforces metadata `x-api-key` for protected methods.
-  - Protected: `/queue.v1.QueueService/Enqueue`, `/Dequeue`, `/Ack`, `/Nack`, `/Renew`
+  - Protected: `/CreateQueue`, `/DeleteQueue`, `/Enqueue`, `/Dequeue`, `/Ack`, `/Nack`, `/Renew`
   - Public: `/Peek`, `/Status`, `/HealthCheck`
   - Note: gRPC metadata key is lowercase `x-api-key` (unlike HTTP header casing).
 - Chain order: Recovery → Logger → Error → Auth (via `grpc.ChainUnaryInterceptor`).
@@ -175,8 +196,12 @@ Examples (grpcurl)
 - Config improvements: `.env` loading and env expansion for `config.yml`; new rate/auth/gRPC sections.
 - Standardized JSON fields, improved error handling, and graceful shutdown on exit.
 - HTTP refactor into server/handler/dto files.
-- Docs: added contributor guide `AGENTS.md`.
- - Added gRPC interceptors: logging/error/recovery/API-key auth via metadata (`x-api-key`), with protected vs public methods. Added `grpc.auth.api_key` to `config.yml`.
+- Added gRPC interceptors: logging/error/recovery/API-key auth via metadata (`x-api-key`), with protected vs public methods. Added `grpc.auth.api_key` to `config.yml`.
+
+## Metrics (Prometheus)
+- Counters: `mq_enqueue_total`, `mq_dequeue_total`, `mq_ack_total`, `mq_nack_total` (label: `queue`)
+- Gauges: `mq_total_messages`, `mq_in_flight_messages`, `mq_dlq_messages` (label: `queue`)
+- Endpoint: `GET /metrics`
 
 ## Security/Operations
 
@@ -185,5 +210,4 @@ Examples (grpcurl)
 - `memory` mode keeps data in memory; data disappears when the process restarts.
 
 ---
-
 If you want this document to stay in sync with new features, feel free to request updates.

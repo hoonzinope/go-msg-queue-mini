@@ -14,6 +14,16 @@
 - **상태 확인**: 합계/ACK/Inflight/DLQ를 반환하는 `/status`
 - **운영 모드**: `debug` 모드(내장 프로듀서/컨슈머 + 모니터) 또는 HTTP/gRPC 서버
 
+## 빠른 시작(Quick Start)
+
+- 사전 준비: Go 1.21+ 설치, 선택사항으로 `protoc`(gRPC 변경 시 필요)
+- 환경 변수: API 키 설정 예시 `export API_KEY=dev-key`
+- 실행(디버그 모드): `go run cmd/main.go` (기본 `memory` 영속성)
+- HTTP 헬스 확인: `curl -s localhost:8080/health`
+- 큐 생성: `curl -X POST localhost:8080/api/v1/default/create -H 'X-API-Key: $API_KEY'`
+- 메시지 Enqueue: `curl -X POST localhost:8080/api/v1/default/enqueue -H 'Content-Type: application/json' -H 'X-API-Key: $API_KEY' -d '{"message": {"text":"hello"}}'`
+- 메시지 Dequeue: `curl -X POST localhost:8080/api/v1/default/dequeue -H 'Content-Type: application/json' -H 'X-API-Key: $API_KEY' -d '{"group":"g1","consumer_id":"c-1"}'`
+
 ## 프로젝트 구조
 
 ```
@@ -33,7 +43,7 @@
 │   ├── config_test.go           # 설정 로더 테스트
 │   ├── api/http/
 │   │   ├── server.go            # Gin HTTP 서버 부트스트랩
-│   │   ├── handler.go           # API 핸들러 (enqueue/dequeue/ack/nack/peek/renew/status/health)
+│   │   ├── handler.go           # API 핸들러 (create/delete/enqueue/dequeue/ack/nack/peek/renew/status/health)
 │   │   └── dto.go               # 요청/응답 DTO
 │   ├── api/grpc/                # gRPC 서버/자동 생성 파일(pb)
 │   │   ├── server.go
@@ -68,7 +78,8 @@
 persistence:
   # memory: 메모리 내 SQLite (디스크 쓰기 없음)
   # file:   파일 기반 SQLite (권장: 로컬 개발/테스트)
-  type: file
+  # 예시1) 기본값(memory):
+  type: memory
   options:
     dirs-path: ./data/persistence
 
@@ -105,6 +116,8 @@ grpc:
 
 - `debug: false` + `http.enabled: true`
   - HTTP API 서버가 `:8080` (또는 설정 포트)에서 기동됩니다.
+- `grpc.enabled: true`
+  - gRPC 서버가 `:50051` (또는 설정 포트)에서 기동됩니다.
 
 ## HTTP API
 
@@ -112,13 +125,21 @@ grpc:
   - 예) `curl -s localhost:8080/health`
 - 메트릭: `GET /metrics` (Prometheus)
 
+- Create Queue: `POST /api/v1/:queue_name/create` (헤더: `X-API-Key` 필요)
+  - 응답: `201 Created`, `{ "status": "created" }`
+
+- Delete Queue: `DELETE /api/v1/:queue_name/delete` (헤더: `X-API-Key` 필요)
+  - 응답: `200 OK`, `{ "status": "deleted" }`
+
 - Enqueue: `POST /api/v1/:queue_name/enqueue` (헤더: `X-API-Key: <키>` 필요)
-  - 요청: `{ "message": <任意 JSON> }`
+  - 요청: `{ "message": <JSON format> }`
   - 예) `curl -X POST localhost:8080/api/v1/default/enqueue -H 'Content-Type: application/json' -H 'X-API-Key: $API_KEY' -d '{"message": {"text":"hello"}}'`
 
 - Dequeue: `POST /api/v1/:queue_name/dequeue` (헤더: `X-API-Key: <키>` 필요)
   - 요청: `{ "group": "g1", "consumer_id": "c-1" }`
-  - 응답: `{ status, message: { id, receipt, payload } }`
+  - 성공: `200 OK`, `{ status, message: { id, receipt, payload } }`
+  - 빈 큐: `204 No Content`
+  - 경합: `409 Conflict`, `{ "status": "message is being processed" }`
 
 - Ack: `POST /api/v1/:queue_name/ack` (헤더: `X-API-Key` 필요)
   - 요청: `{ "group": "g1", "message_id": 1, "receipt": "..." }`
@@ -129,6 +150,7 @@ grpc:
 
 - Peek: `POST /api/v1/:queue_name/peek`
   - 요청: `{ "group": "g1" }` (할당/리스 없이 가장 앞 메시지 확인)
+  - 빈 큐: `204 No Content`
 
 - Renew: `POST /api/v1/:queue_name/renew` (헤더: `X-API-Key` 필요)
   - 요청: `{ "group": "g1", "message_id": 1, "receipt": "...", "extend_sec": 5 }`
@@ -142,7 +164,8 @@ grpc:
 ## gRPC API
 - 활성화: `grpc.enabled: true`, 포트 기본 `50051`.
 - 헬스체크: `queue.v1.QueueService/HealthCheck` → `{ status: "ok" }`.
-- 주요 RPC: `Enqueue`, `Dequeue`, `Ack`, `Nack`, `Peek`, `Renew`, `Status` (proto: `proto/queue.proto`).
+- 주요 RPC: `CreateQueue`, `DeleteQueue`, `Enqueue`, `Dequeue`, `Ack`, `Nack`, `Peek`, `Renew`, `Status` (proto: `proto/queue.proto`).
+- 메시지 타입: gRPC `message` 필드는 문자열(string)이며, HTTP는 임의의 JSON을 지원합니다.
 - 호출 예시(grpcurl): `grpcurl -plaintext localhost:50051 list` / `grpcurl -plaintext -d '{"queue_name":"default","message":"hi"}' localhost:50051 queue.v1.QueueService/Enqueue`.
 
 ## gRPC 인터셉터
@@ -150,7 +173,7 @@ grpc:
 - 에러 로그: `ErrorInterceptor`가 핸들러 에러를 로깅합니다.
 - 복구: `RecoveryInterceptor`가 panic을 내부 오류(codes.Internal)로 변환합니다.
 - 인증: `AuthInterceptor(apiKey, protectedMethods)`가 보호 메서드에 대해 메타데이터 `x-api-key`를 검증합니다.
-  - 보호됨: `/queue.v1.QueueService/Enqueue`, `/Dequeue`, `/Ack`, `/Nack`, `/Renew`
+  - 보호됨: `/CreateQueue`, `/DeleteQueue`, `/Enqueue`, `/Dequeue`, `/Ack`, `/Nack`, `/Renew`
   - 공개됨: `/Peek`, `/Status`, `/HealthCheck`
   - gRPC 메타데이터 키는 소문자 `x-api-key`입니다. HTTP와 다르게 헤더 키 대소문자가 중요합니다.
 - 체인 순서: Recovery → Logger → Error → Auth (서버 초기화 시 `grpc.ChainUnaryInterceptor`로 묶음).
@@ -171,13 +194,19 @@ grpc:
 - 설정 개선: `.env` 로드 및 `config.yml` 환경변수 치환 지원, 레이트 리밋/인증/GRPC 섹션 추가.
 - JSON 필드 표준화 및 에러 처리 개선, 서버 종료 시 graceful shutdown 보장.
 - HTTP 구조 리팩터링: server/handler/dto 파일 분리.
-- 문서: 기여자 가이드 `AGENTS.md` 추가.
- - gRPC 인터셉터 추가: 로깅/에러/복구/메타데이터 기반 API 키 인증(`x-api-key`), 보호 메서드 분리. `config.yml`에 `grpc.auth.api_key` 추가.
+- gRPC 인터셉터 추가: 로깅/에러/복구/메타데이터 기반 API 키 인증(`x-api-key`), 보호/공개 메서드 분리. `config.yml`에 `grpc.auth.api_key` 추가.
+
+## 메트릭 지표(Prometheus)
+- 카운터: `mq_enqueue_total`, `mq_dequeue_total`, `mq_ack_total`, `mq_nack_total` (라벨: `queue`)
+- 게이지: `mq_total_messages`, `mq_in_flight_messages`, `mq_dlq_messages` (라벨: `queue`)
+- 엔드포인트: `GET /metrics`
 
 ## 보안/운영 팁
 
 - 비밀정보는 커밋하지 마세요. `config.yml`은 로컬 개발용입니다.
 - `file` 모드 사용 시 `persistence.options.dirs-path`가 존재하고 쓰기 가능해야 합니다.
 - `memory` 모드는 디스크에 기록하지 않으므로 프로세스 재시작 시 데이터가 사라집니다.
+
+---
 
 ---
