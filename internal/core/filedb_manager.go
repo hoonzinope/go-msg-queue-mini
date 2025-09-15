@@ -32,7 +32,7 @@ type queueMsg struct {
 	PartitionID int    // 복제시 파티션 식별용
 }
 
-var OneDayHours = 24 * 60 * 60 // 24 hours
+var OneDayInSeconds = 24 * 60 * 60 // 24 hours
 
 func NewFileDBManager(dsn string, queueType string) (*FileDBManager, error) {
 	db, err := sql.Open("sqlite3", dsn) // dsn: "file:/path/db.sqlite3"
@@ -112,7 +112,7 @@ func (m *FileDBManager) deleteQueueMsg() (int64, error) {
 		if err != nil {
 			return 0, err
 		}
-		resAffected, _ := res.RowsAffected()
+		resAffected, err := res.RowsAffected()
 		return resAffected, err
 	})
 }
@@ -354,7 +354,7 @@ func (m *FileDBManager) ListQueues() ([]string, error) {
 }
 
 func (m *FileDBManager) CreateQueue(name string) error {
-	defaultRetention := OneDayHours
+	defaultRetention := OneDayInSeconds
 	defaultMaxDelivery := 10
 	defaultBackoffBase := 1
 	defaultPartitionN := 1
@@ -602,8 +602,8 @@ func (m *FileDBManager) NackMessageWithMeta(
 		} // clamp
 		jitter := util.GenerateJitter(backoffSec)
 		backoffSec = backoffSec*(1<<(retryCount-1)) + jitter // 첫 호출 기준 2^(n-1)
-		if backoffSec > OneDayHours {
-			backoffSec = OneDayHours
+		if backoffSec > OneDayInSeconds {
+			backoffSec = OneDayInSeconds
 		}
 
 		res, err := tx.Exec(`
@@ -702,13 +702,17 @@ func (m *FileDBManager) GetStatus(queue_name string) (internal.QueueStatus, erro
 
 func (m *FileDBManager) GetAllStatus() ([]internal.QueueStatus, error) {
 	rows, err := m.db.Query(`
-	select 
+		SELECT
 		qi.name as queue_name,
-		(select COUNT(*) from queue where queue_info_id = qi.id) as total_messages,
-		(select COUNT(*) from acked where queue_info_id = qi.id) as acked_messages,
-		(select COUNT(*) from inflight where queue_info_id = qi.id) as inflight_messages,
-		(select COUNT(*) from dlq where queue_info_id = qi.id) as dlq_messages
-	from queue_info qi
+		COALESCE(q.cnt, 0) as total_messages,
+		COALESCE(a.cnt, 0) as acked_messages,
+		COALESCE(i.cnt, 0) as inflight_messages,
+		COALESCE(d.cnt, 0) as dlq_messages
+	FROM queue_info qi
+	LEFT JOIN (SELECT queue_info_id, COUNT(*) as cnt FROM queue GROUP BY queue_info_id) q ON q.queue_info_id = qi.id
+	LEFT JOIN (SELECT queue_info_id, COUNT(*) as cnt FROM acked GROUP BY queue_info_id) a ON a.queue_info_id = qi.id
+	LEFT JOIN (SELECT queue_info_id, COUNT(*) as cnt FROM inflight GROUP BY queue_info_id) i ON i.queue_info_id = qi.id
+	LEFT JOIN (SELECT queue_info_id, COUNT(*) as cnt FROM dlq GROUP BY queue_info_id) d ON d.queue_info_id = qi.id
 	`)
 	if err != nil {
 		return nil, err

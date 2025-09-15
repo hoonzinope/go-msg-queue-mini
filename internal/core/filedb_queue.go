@@ -36,7 +36,7 @@ func NewFileDBQueue(config *internal.Config) (*fileDBQueue, error) {
 		}
 		if info, err := os.Stat(config.Persistence.Options.DirsPath); err != nil || !info.IsDir() {
 			// if not exist, create it
-			if err := os.MkdirAll(config.Persistence.Options.DirsPath, os.ModePerm); err != nil {
+			if err := os.MkdirAll(config.Persistence.Options.DirsPath, 0755); err != nil {
 				return nil, fmt.Errorf("failed to create directory: %w", err)
 			}
 		}
