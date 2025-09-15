@@ -8,14 +8,14 @@ import (
 	"go-msg-queue-mini/internal/metrics"
 	"go-msg-queue-mini/internal/queue_error"
 	"go-msg-queue-mini/util"
+	"os"
 	"sync"
 	"time"
 )
 
 type fileDBQueue struct {
 	manager        *FileDBManager
-	mu             sync.Mutex
-	groupLock      map[string]*sync.Mutex
+	groupLock      sync.Map // map[string]*sync.Mutex
 	maxRetry       int
 	retryInterval  time.Duration
 	leaseDuration  time.Duration
@@ -25,13 +25,27 @@ type fileDBQueue struct {
 }
 
 func NewFileDBQueue(config *internal.Config) (*fileDBQueue, error) {
-	dbpath := config.Persistence.Options.DirsPath + "/filedb_queue.db"
-	// options
-	dboptions := "?_txlock=immediate&_busy_timeout=5000&_journal=WAL&_sync=NORMAL&_fk=1"
-	dbpath = fmt.Sprintf("file:%s%s", dbpath, dboptions)
+	dbpath := ""
 	queueType := config.Persistence.Type
-	if queueType == "memory" {
+	switch queueType {
+	case "memory":
 		dbpath = ":memory:"
+	case "file":
+		if config.Persistence.Options.DirsPath == "" {
+			return nil, fmt.Errorf("filedb_queue requires a valid directory path")
+		}
+		if info, err := os.Stat(config.Persistence.Options.DirsPath); err != nil || !info.IsDir() {
+			// if not exist, create it
+			if err := os.MkdirAll(config.Persistence.Options.DirsPath, 0755); err != nil {
+				return nil, fmt.Errorf("failed to create directory: %w", err)
+			}
+		}
+		dbpath = config.Persistence.Options.DirsPath + "/filedb_queue.db"
+		// options
+		dboptions := "?_txlock=immediate&_busy_timeout=5000&_journal=WAL&_sync=NORMAL&_fk=1"
+		dbpath = fmt.Sprintf("file:%s%s", dbpath, dboptions)
+	default:
+		return nil, fmt.Errorf("unsupported queue type: %s", queueType)
 	}
 
 	retryInterval, err := time.ParseDuration(config.RetryInterval)
@@ -50,7 +64,7 @@ func NewFileDBQueue(config *internal.Config) (*fileDBQueue, error) {
 	}
 	fq := &fileDBQueue{
 		manager:        manager,
-		groupLock:      map[string]*sync.Mutex{},
+		groupLock:      sync.Map{},
 		maxRetry:       config.MaxRetry,
 		retryInterval:  retryInterval,
 		leaseDuration:  leaseDuration,
@@ -61,16 +75,12 @@ func NewFileDBQueue(config *internal.Config) (*fileDBQueue, error) {
 	return fq, nil
 }
 
-func (q *fileDBQueue) Lock(group string) func() {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-
-	groupLock, ok := q.groupLock[group]
-	if !ok {
-		groupLock = &sync.Mutex{}
-		q.groupLock[group] = groupLock
-	}
+func (q *fileDBQueue) Lock(queue_name, group string) func() {
+	key := fmt.Sprintf("%s:%s", queue_name, group)
+	val, _ := q.groupLock.LoadOrStore(key, &sync.Mutex{})
+	groupLock := val.(*sync.Mutex)
 	groupLock.Lock()
+
 	return func() {
 		groupLock.Unlock()
 	}
@@ -98,7 +108,7 @@ func (q *fileDBQueue) Enqueue(queue_name string, item interface{}) error {
 }
 
 func (q *fileDBQueue) Dequeue(queue_name, consumer_group string, consumer_id string) (internal.QueueMessage, error) {
-	unLock := q.Lock(consumer_group)
+	unLock := q.Lock(queue_name, consumer_group)
 	defer unLock()
 
 	queueMessage := internal.QueueMessage{
@@ -214,18 +224,14 @@ func (q *fileDBQueue) intervalStatusMetrics() {
 }
 
 func (q *fileDBQueue) statusMetrics() {
-	queue_names, err := q.manager.ListQueues()
+	statuses, err := q.manager.GetAllStatus()
 	if err != nil {
-		util.Error(fmt.Sprintf("Error listing queues: %v", err))
+		util.Error(fmt.Sprintf("Error getting all queue statuses: %v", err))
 		return
 	}
-	for _, name := range queue_names {
-		status, err := q.manager.GetStatus(name)
-		if err != nil {
-			util.Error(fmt.Sprintf("Error getting queue status: %v", err))
-		}
-		q.MQMetrics.TotalMessages.WithLabelValues(name).Set(float64(status.TotalMessages))
-		q.MQMetrics.InFlightMessages.WithLabelValues(name).Set(float64(status.InflightMessages))
-		q.MQMetrics.DLQMessages.WithLabelValues(name).Set(float64(status.DLQMessages))
+	for _, status := range statuses {
+		q.MQMetrics.TotalMessages.WithLabelValues(status.QueueName).Set(float64(status.TotalMessages))
+		q.MQMetrics.InFlightMessages.WithLabelValues(status.QueueName).Set(float64(status.InflightMessages))
+		q.MQMetrics.DLQMessages.WithLabelValues(status.QueueName).Set(float64(status.DLQMessages))
 	}
 }

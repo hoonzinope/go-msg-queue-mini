@@ -32,6 +32,8 @@ type queueMsg struct {
 	PartitionID int    // 복제시 파티션 식별용
 }
 
+var OneDayInSeconds = 24 * 60 * 60 // 24 hours
+
 func NewFileDBManager(dsn string, queueType string) (*FileDBManager, error) {
 	db, err := sql.Open("sqlite3", dsn) // dsn: "file:/path/db.sqlite3"
 	if err != nil {
@@ -91,65 +93,47 @@ func (m *FileDBManager) intervalJob() error {
 }
 
 func (m *FileDBManager) deleteQueueMsg() (int64, error) {
-	tx, err := m.db.Begin()
-	if err != nil {
-		return 0, err
-	}
-	defer func() {
+	return m.inTxWithCount(func(tx *sql.Tx) (int64, error) {
+		res, err := tx.Exec(`
+			DELETE FROM queue
+			WHERE id IN (
+				SELECT q.id
+				FROM queue q
+					JOIN queue_info qi 
+						ON qi.id = q.queue_info_id
+					LEFT JOIN inflight i
+						ON i.queue_info_id = q.queue_info_id
+						AND i.q_id         = q.id
+				WHERE 
+					i.q_id IS NULL
+					AND q.insert_ts <= DATETIME('now', printf('-%d seconds', qi.retention_s))
+			);
+		`)
 		if err != nil {
-			_ = tx.Rollback()
-		} else {
-			err = tx.Commit()
+			return 0, err
 		}
-	}()
-	res, err := tx.Exec(`
-        DELETE FROM queue
-		WHERE id IN (
-			SELECT q.id
-			FROM queue q
-				JOIN queue_info qi 
-					ON qi.id = q.queue_info_id
-				LEFT JOIN inflight i
-					ON i.queue_info_id = q.queue_info_id
-					AND i.q_id         = q.id
-			WHERE 
-				i.q_id IS NULL
-				AND q.insert_ts <= DATETIME('now', printf('-%d seconds', qi.retention_s))
-		);
-	`)
-	if err != nil {
-		return 0, err
-	}
-	resAffected, _ := res.RowsAffected()
-	return resAffected, err
+		resAffected, err := res.RowsAffected()
+		return resAffected, err
+	})
 }
 
 func (m *FileDBManager) deleteAckedMsg() (int64, error) {
-	tx, err := m.db.Begin()
-	if err != nil {
-		return 0, err
-	}
-	defer func() {
+	return m.inTxWithCount(func(tx *sql.Tx) (int64, error) {
+		res, err := tx.Exec(`
+			DELETE FROM acked
+			WHERE (queue_info_id, acked_at) IN (
+				SELECT qi.id, a.acked_at
+				FROM acked a
+					JOIN queue_info qi 
+						ON qi.id = a.queue_info_id
+				WHERE a.acked_at <= DATETIME('now', printf('-%d seconds', qi.retention_s))
+		);`)
 		if err != nil {
-			_ = tx.Rollback()
-		} else {
-			err = tx.Commit()
+			return 0, err
 		}
-	}()
-	res, err := tx.Exec(`
-		DELETE FROM acked
-		WHERE (queue_info_id, acked_at) IN (
-			SELECT qi.id, a.acked_at
-			FROM acked a
-				JOIN queue_info qi 
-					ON qi.id = a.queue_info_id
-			WHERE a.acked_at <= DATETIME('now', printf('-%d seconds', qi.retention_s))
-	);`)
-	if err != nil {
-		return 0, err
-	}
-	resAffected, err := res.RowsAffected()
-	return resAffected, err
+		resAffected, err := res.RowsAffected()
+		return resAffected, err
+	})
 }
 
 func (m *FileDBManager) vacuum() error {
@@ -370,7 +354,7 @@ func (m *FileDBManager) ListQueues() ([]string, error) {
 }
 
 func (m *FileDBManager) CreateQueue(name string) error {
-	defaultRetention := 86400
+	defaultRetention := OneDayInSeconds
 	defaultMaxDelivery := 10
 	defaultBackoffBase := 1
 	defaultPartitionN := 1
@@ -387,10 +371,18 @@ func (m *FileDBManager) createQueue(name string, retentionSec, maxDelivery, back
 		return nil // 이미 존재하면 그냥 통과
 	}
 
-	_, err := m.db.Exec(`
+	row, err := m.db.Exec(`
 		INSERT INTO queue_info (name, retention_s, max_delivery, backoff_base, partition_n)
 		VALUES (?, ?, ?, ?, ?)`, name, retentionSec, maxDelivery, backoffBase, partitionN)
-	return err
+	if err != nil {
+		return err
+	}
+	rowID, err := row.LastInsertId()
+	if err != nil {
+		return err
+	}
+	m.queueNameMap.Store(name, rowID)
+	return nil
 }
 
 func (m *FileDBManager) DeleteQueue(name string) error {
@@ -400,10 +392,11 @@ func (m *FileDBManager) DeleteQueue(name string) error {
 	}
 
 	_, err := m.db.Exec(`DELETE FROM queue_info WHERE name = ?`, name)
-	if err == nil {
-		m.queueNameMap.Delete(name)
+	if err != nil {
+		return err
 	}
-	return err
+	m.queueNameMap.Delete(name)
+	return nil
 }
 
 func (m *FileDBManager) WriteMessage(queue_name string, msg []byte) (err error) {
@@ -417,19 +410,14 @@ func (m *FileDBManager) WriteMessageWithMeta(queue_name string, msg []byte, glob
 	if queueInfoID < 0 || err != nil {
 		return fmt.Errorf("queue not found: %s", queue_name)
 	}
-	tx, err := m.db.Begin()
-	if err != nil {
+	return m.inTx(func(tx *sql.Tx) error {
+		_, err = tx.Exec(`
+		INSERT INTO queue 
+		(queue_info_id, msg, global_id, partition_id) 
+		VALUES (?, ?, ?, ?)`,
+			queueInfoID, msg, globalID, partitionID)
 		return err
-	}
-	defer func() {
-		if err != nil {
-			_ = tx.Rollback()
-		} else {
-			err = tx.Commit()
-		}
-	}()
-	_, err = tx.Exec(`INSERT INTO queue (queue_info_id, msg, global_id, partition_id) VALUES (?, ?, ?, ?)`, queueInfoID, msg, globalID, partitionID)
-	return err
+	})
 }
 
 func (m *FileDBManager) ReadMessage(queue_name, group, consumerID string, leaseSec int) (_ queueMsg, err error) {
@@ -443,110 +431,101 @@ func (m *FileDBManager) ReadMessageWithMeta(queue_name, group string, partitionI
 		return queueMsg{}, fmt.Errorf("queue not found: %s", queue_name)
 	}
 	// 트랜잭션 시작
-	tx, err := m.db.Begin()
-	if err != nil {
-		return queueMsg{}, err
-	}
-	defer func() {
-		if err != nil {
-			_ = tx.Rollback()
-		} else {
-			err = tx.Commit()
+	return m.inTxWithQueueMsg(func(tx *sql.Tx) (queueMsg, error) {
+		// 1) 후보 조회
+		var candID int64
+		var globalID string
+		err = tx.QueryRow(`
+			SELECT q.id, q.global_id
+			FROM queue q
+			LEFT JOIN acked a   ON 
+				a.queue_info_id = q.queue_info_id AND 
+				a.global_id = q.global_id AND 
+				a.group_name = ? AND 
+				a.partition_id = ?
+			LEFT JOIN inflight i ON
+				i.queue_info_id = q.queue_info_id AND 
+				i.q_id = q.id AND 
+				i.group_name = ? AND 
+				i.partition_id = ?
+			WHERE
+			q.queue_info_id = ? 
+			AND a.global_id IS NULL
+			AND (i.q_id IS NULL OR i.lease_until <= CURRENT_TIMESTAMP)
+			AND q.partition_id = ?
+			ORDER BY q.id ASC
+			LIMIT 1
+		`, group, partitionID, group, partitionID, queueInfoID, partitionID).Scan(&candID, &globalID)
+		if err == sql.ErrNoRows {
+			return queueMsg{}, queue_error.ErrEmpty
 		}
-	}()
+		if err != nil {
+			return queueMsg{}, err
+		}
 
-	// 1) 후보 조회
-	var candID int64
-	var globalID string
-	err = tx.QueryRow(`
-		SELECT q.id, q.global_id
-		FROM queue q
-		LEFT JOIN acked a   ON 
-			a.queue_info_id = q.queue_info_id AND 
-			a.global_id = q.global_id AND 
-			a.group_name = ? AND a.partition_id = ?
-		LEFT JOIN inflight i ON
-			i.queue_info_id = q.queue_info_id AND 
-			i.q_id = q.id AND 
-			i.group_name = ? AND 
-			i.partition_id = ?
-		WHERE
-		  q.queue_info_id = ? 
-		  AND a.global_id IS NULL
-		  AND (i.q_id IS NULL OR i.lease_until <= CURRENT_TIMESTAMP)
-		  AND q.partition_id = ?
-		ORDER BY q.id ASC
-		LIMIT 1
-	`, group, partitionID, group, partitionID, queueInfoID, partitionID).Scan(&candID, &globalID)
-	if err == sql.ErrNoRows {
-		return queueMsg{}, queue_error.ErrEmpty
-	}
-	if err != nil {
-		return queueMsg{}, err
-	}
-
-	// 2) 선점 시도 (UPSERT). leaseSec는 정수(초)
-	res, err := tx.Exec(`
-		INSERT INTO 
-			inflight(
-				q_id, queue_info_id, group_name, consumer_id, lease_until, 
-				delivery_count, claimed_at, receipt, partition_id, 
-				global_id)
-		SELECT ?, ?, ?, ?, DATETIME('now', ? || ' seconds'),
-			   COALESCE(
-			   (SELECT delivery_count FROM inflight 
-			   WHERE queue_info_id = ? AND group_name=? AND partition_id=? AND q_id=?),0)+1,
-			   CURRENT_TIMESTAMP,
-			   lower(hex(randomblob(16))) AS receipt,
-			   ?, ?
-		WHERE NOT EXISTS (
-			SELECT 1 FROM inflight
-			WHERE queue_info_id = ? AND group_name=? AND partition_id=? AND q_id=? AND lease_until > CURRENT_TIMESTAMP
-		)
-		ON CONFLICT(queue_info_id, group_name, partition_id, q_id) DO UPDATE SET
-		  consumer_id    = excluded.consumer_id,
-		  lease_until    = excluded.lease_until,
-		  delivery_count = inflight.delivery_count + 1,
-		  claimed_at     = CURRENT_TIMESTAMP,
-		  receipt        = excluded.receipt
-		  WHERE inflight.lease_until <= CURRENT_TIMESTAMP
-	`, candID, queueInfoID, group, consumerID, leaseSec,
-		queueInfoID, group, partitionID, candID,
-		partitionID, globalID,
-		queueInfoID, group, partitionID, candID)
-	if err != nil {
-		return queueMsg{}, err
-	}
-	n, _ := res.RowsAffected()
-	if n == 0 {
-		// 경합으로 못 집었음 → 상위 레벨에서 재호출(또는 이 함수 내부에서 짧은 루프)
-		return queueMsg{}, queue_error.ErrContended
-	}
-	// 3) 내가 점유한 메시지 반환 (consumer_id로 한정)
-	var msg queueMsg
-	msg.QueueName = queue_name
-	err = tx.QueryRow(`
-		SELECT 
-		q.id, q.msg, q.insert_ts, i.receipt, q.global_id, q.partition_id
-		FROM queue q
-		JOIN inflight i ON 
-			i.q_id = q.id AND
-			i.queue_info_id = q.queue_info_id
-		JOIN queue_info qi ON
-			qi.id = q.queue_info_id
-		WHERE 
-			i.queue_info_id = ? 
-			AND i.group_name = ? 
-			AND i.consumer_id = ? 
-			AND i.partition_id = ?
-		ORDER BY i.claimed_at DESC
-		LIMIT 1
-	`, queueInfoID, group, consumerID, partitionID).Scan(
-		&msg.ID, &msg.Msg, &msg.InsertTS, &msg.Receipt, &msg.GlobalID, &msg.PartitionID)
-	if err != nil {
-		return queueMsg{}, err
-	}
-	return msg, nil
+		// 2) 선점 시도 (UPSERT). leaseSec는 정수(초)
+		res, err := tx.Exec(`
+			INSERT INTO 
+				inflight(
+					q_id, queue_info_id, group_name, consumer_id, lease_until, 
+					delivery_count, claimed_at, receipt, partition_id, 
+					global_id)
+			SELECT ?, ?, ?, ?, DATETIME('now', ? || ' seconds'),
+				COALESCE(
+				(SELECT delivery_count FROM inflight 
+				WHERE queue_info_id = ? AND group_name=? AND partition_id=? AND q_id=?),0)+1,
+				CURRENT_TIMESTAMP,
+				lower(hex(randomblob(16))) AS receipt,
+				?, ?
+			WHERE NOT EXISTS (
+				SELECT 1 FROM inflight
+				WHERE queue_info_id = ? AND group_name=? AND partition_id=? AND q_id=? AND lease_until > CURRENT_TIMESTAMP
+			)
+			ON CONFLICT(queue_info_id, group_name, partition_id, q_id) DO UPDATE SET
+			consumer_id    = excluded.consumer_id,
+			lease_until    = excluded.lease_until,
+			delivery_count = inflight.delivery_count + 1,
+			claimed_at     = CURRENT_TIMESTAMP,
+			receipt        = excluded.receipt
+			WHERE inflight.lease_until <= CURRENT_TIMESTAMP
+		`, candID, queueInfoID, group, consumerID, leaseSec,
+			queueInfoID, group, partitionID, candID,
+			partitionID, globalID,
+			queueInfoID, group, partitionID, candID)
+		if err != nil {
+			return queueMsg{}, err
+		}
+		n, _ := res.RowsAffected()
+		if n == 0 {
+			// 경합으로 못 집었음 → 상위 레벨에서 재호출(또는 이 함수 내부에서 짧은 루프)
+			return queueMsg{}, queue_error.ErrContended
+		}
+		// 3) 내가 점유한 메시지 반환 (consumer_id로 한정)
+		var msg queueMsg
+		msg.QueueName = queue_name
+		err = tx.QueryRow(`
+			SELECT 
+			q.id, q.msg, q.insert_ts, i.receipt, q.global_id, q.partition_id
+			FROM queue q
+			JOIN inflight i ON 
+				i.q_id = q.id AND
+				i.queue_info_id = q.queue_info_id
+			JOIN queue_info qi ON
+				qi.id = q.queue_info_id
+			WHERE 
+				i.queue_info_id = ? 
+				AND i.group_name = ? 
+				AND i.consumer_id = ? 
+				AND i.partition_id = ?
+			ORDER BY i.claimed_at DESC
+			LIMIT 1
+		`, queueInfoID, group, consumerID, partitionID).Scan(
+			&msg.ID, &msg.Msg, &msg.InsertTS, &msg.Receipt, &msg.GlobalID, &msg.PartitionID)
+		if err != nil {
+			return queueMsg{}, err
+		}
+		return msg, nil
+	})
 }
 
 func (m *FileDBManager) AckMessage(queue_name, group string, msgID int64, receipt string) (err error) {
@@ -565,37 +544,30 @@ func (m *FileDBManager) AckMessageWithMeta(queue_name, group string, partitionID
 		return fmt.Errorf("queue not found: %s", queue_name)
 	}
 
-	tx, err := m.db.Begin()
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if err != nil {
-			_ = tx.Rollback()
-		} else {
-			err = tx.Commit()
+	return m.inTx(func(tx *sql.Tx) error {
+		if _, err = tx.Exec(`
+			DELETE FROM inflight WHERE 
+				queue_info_id = ? AND 
+				global_id = ? AND 
+				partition_id = ? AND 
+				group_name = ? AND 
+				receipt = ?`, queueInfoID, globalID, partitionID, group, receipt); err != nil {
+			return err
 		}
-	}()
-	if _, err = tx.Exec(`
-		DELETE FROM inflight WHERE 
-			queue_info_id = ? AND 
-			global_id = ? AND 
-			partition_id = ? AND 
-			group_name = ? AND 
-			receipt = ?`, queueInfoID, globalID, partitionID, group, receipt); err != nil {
-		return err
-	}
 
-	if _, err = tx.Exec(`
-		INSERT OR IGNORE INTO acked 
-		(queue_info_id, group_name, partition_id, global_id) 
-		VALUES (?, ?, ?, ?)`, queueInfoID, group, partitionID, globalID); err != nil {
-		return err
-	}
-	return nil
+		if _, err = tx.Exec(`
+			INSERT OR IGNORE INTO acked 
+			(queue_info_id, group_name, partition_id, global_id) 
+			VALUES (?, ?, ?, ?)`, queueInfoID, group, partitionID, globalID); err != nil {
+			return err
+		}
+		return nil
+	})
 }
 
-func (m *FileDBManager) NackMessage(queue_name, group string, msgID int64, receipt string, backoff time.Duration, maxDeliveries int, reason string) (err error) {
+func (m *FileDBManager) NackMessage(
+	queue_name, group string, msgID int64, receipt string,
+	backoff time.Duration, maxDeliveries int, reason string) (err error) {
 	var globalID string
 	var partitionID int
 	err = m.db.QueryRow(`SELECT global_id, partition_id FROM queue WHERE id = ?`, msgID).Scan(&globalID, &partitionID)
@@ -605,79 +577,71 @@ func (m *FileDBManager) NackMessage(queue_name, group string, msgID int64, recei
 	return m.NackMessageWithMeta(queue_name, group, partitionID, globalID, receipt, backoff, maxDeliveries, reason)
 }
 
-func (m *FileDBManager) NackMessageWithMeta(queue_name, group string, partitionID int, globalID, receipt string, backoff time.Duration, maxDeliveries int, reason string) (err error) {
+func (m *FileDBManager) NackMessageWithMeta(
+	queue_name, group string, partitionID int, globalID, receipt string,
+	backoff time.Duration, maxDeliveries int, reason string) (err error) {
 	queueInfoID, err := m.getQueueInfoID(queue_name)
 	if queueInfoID < 0 || err != nil {
 		return fmt.Errorf("queue not found: %s", queue_name)
 	}
 
-	tx, err := m.db.Begin()
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if err != nil {
-			_ = tx.Rollback()
-		} else {
-			err = tx.Commit()
-		}
-	}()
-	var retryCount int
-	if err = tx.QueryRow(
-		`SELECT delivery_count
+	return m.inTx(func(tx *sql.Tx) error {
+		var retryCount int
+		if err = tx.QueryRow(
+			`SELECT delivery_count
 		FROM inflight
 		WHERE queue_info_id = ? AND global_id = ? AND partition_id = ? AND receipt = ?`,
-		queueInfoID, globalID, partitionID, receipt).Scan(&retryCount); err != nil {
-		return err
-	}
+			queueInfoID, globalID, partitionID, receipt).Scan(&retryCount); err != nil {
+			return err
+		}
 
-	// 지수적 backoff 증가
-	backoffSec := int(backoff.Seconds())
-	if backoffSec < 1 {
-		backoffSec = 1
-	} // clamp
-	jitter := util.GenerateJitter(backoffSec)
-	backoffSec = backoffSec*(1<<(retryCount-1)) + jitter // 첫 호출 기준 2^(n-1)
-	if backoffSec > 86400 {
-		backoffSec = 86400
-	}
+		// 지수적 backoff 증가
+		backoffSec := int(backoff.Seconds())
+		if backoffSec < 1 {
+			backoffSec = 1
+		} // clamp
+		jitter := util.GenerateJitter(backoffSec)
+		backoffSec = backoffSec*(1<<(retryCount-1)) + jitter // 첫 호출 기준 2^(n-1)
+		if backoffSec > OneDayInSeconds {
+			backoffSec = OneDayInSeconds
+		}
 
-	res, err := tx.Exec(`
+		res, err := tx.Exec(`
         UPDATE inflight
         SET lease_until    = DATETIME('now', ? || ' seconds'),
             delivery_count = delivery_count + 1,
             last_error     = ?
         WHERE queue_info_id = ? AND global_id = ? AND partition_id = ? AND receipt = ?
     `, backoffSec,
-		reason,
-		queueInfoID, globalID, partitionID, receipt)
-	if err != nil {
-		return err
-	}
+			reason,
+			queueInfoID, globalID, partitionID, receipt)
+		if err != nil {
+			return err
+		}
 
-	n, _ := res.RowsAffected()
-	if n == 0 {
-		return queue_error.ErrContended
-	}
+		n, _ := res.RowsAffected()
+		if n == 0 {
+			return queue_error.ErrContended
+		}
 
-	var dc int
-	if err = tx.QueryRow(`
+		var dc int
+		if err = tx.QueryRow(`
         SELECT delivery_count 
 		FROM inflight 
 		WHERE queue_info_id = ? AND group_name = ? AND global_id = ? AND partition_id = ? AND receipt = ?
     `, queueInfoID, group, globalID, partitionID, receipt).Scan(&dc); err != nil {
-		return err
-	}
-	if dc > maxDeliveries {
-		if _, err = tx.Exec(`
+			return err
+		}
+		if dc > maxDeliveries {
+			if _, err = tx.Exec(`
 		INSERT INTO dlq(q_id, queue_info_id, global_id, partition_id, msg, failed_group, reason)
 		SELECT q.id, q.queue_info_id, q.global_id, q.partition_id, q.msg, ?, ?
 		FROM queue q WHERE q.queue_info_id = ? AND q.global_id = ? AND q.partition_id = ?
         `, group, reason, queueInfoID, globalID, partitionID); err != nil {
-			return err
-		}
+				return err
+			}
 
-		if _, err = tx.Exec(`
+			if _, err = tx.Exec(`
 		DELETE FROM inflight 
 		WHERE 
 			queue_info_id = ? 
@@ -685,18 +649,19 @@ func (m *FileDBManager) NackMessageWithMeta(queue_name, group string, partitionI
 			AND global_id = ? 
 			AND partition_id = ? 
 			AND receipt = ?`,
-			queueInfoID, group, globalID, partitionID, receipt); err != nil {
-			return err
-		}
-		if _, err = tx.Exec(`
+				queueInfoID, group, globalID, partitionID, receipt); err != nil {
+				return err
+			}
+			if _, err = tx.Exec(`
 		INSERT OR IGNORE INTO acked 
 		(queue_info_id, group_name, partition_id, global_id) 
 		VALUES (?, ?, ?, ?)`, queueInfoID, group, partitionID, globalID); err != nil {
-			return err
+				return err
+			}
+			fmt.Printf("Message %s exceeded max deliveries (%d). Moving to DLQ.\n", globalID, maxDeliveries)
 		}
-		fmt.Printf("Message %s exceeded max deliveries (%d). Moving to DLQ.\n", globalID, maxDeliveries)
-	}
-	return nil
+		return nil
+	})
 }
 
 func (m *FileDBManager) GetStatus(queue_name string) (internal.QueueStatus, error) {
@@ -735,6 +700,42 @@ func (m *FileDBManager) GetStatus(queue_name string) (internal.QueueStatus, erro
 	return status, nil
 }
 
+func (m *FileDBManager) GetAllStatus() ([]internal.QueueStatus, error) {
+	rows, err := m.db.Query(`
+		SELECT
+		qi.name as queue_name,
+		COALESCE(q.cnt, 0) as total_messages,
+		COALESCE(a.cnt, 0) as acked_messages,
+		COALESCE(i.cnt, 0) as inflight_messages,
+		COALESCE(d.cnt, 0) as dlq_messages
+	FROM queue_info qi
+	LEFT JOIN (SELECT queue_info_id, COUNT(*) as cnt FROM queue GROUP BY queue_info_id) q ON q.queue_info_id = qi.id
+	LEFT JOIN (SELECT queue_info_id, COUNT(*) as cnt FROM acked GROUP BY queue_info_id) a ON a.queue_info_id = qi.id
+	LEFT JOIN (SELECT queue_info_id, COUNT(*) as cnt FROM inflight GROUP BY queue_info_id) i ON i.queue_info_id = qi.id
+	LEFT JOIN (SELECT queue_info_id, COUNT(*) as cnt FROM dlq GROUP BY queue_info_id) d ON d.queue_info_id = qi.id
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var statuses []internal.QueueStatus
+	for rows.Next() {
+		var status internal.QueueStatus
+		status.QueueType = m.queueType
+		if err := rows.Scan(
+			&status.QueueName,
+			&status.TotalMessages,
+			&status.AckedMessages,
+			&status.InflightMessages,
+			&status.DLQMessages); err != nil {
+			return nil, err
+		}
+		statuses = append(statuses, status)
+	}
+	return statuses, nil
+}
+
 func (m *FileDBManager) PeekMessage(queue_name, group string) (_ queueMsg, err error) {
 	partitionID := 0
 	return m.PeekMessageWithMeta(queue_name, group, partitionID)
@@ -746,28 +747,24 @@ func (m *FileDBManager) PeekMessageWithMeta(queue_name, group string, partitionI
 		return queueMsg{}, fmt.Errorf("queue not found: %s", queue_name)
 	}
 	// 트랜잭션 시작
-	tx, err := m.db.Begin()
-	if err != nil {
-		return queueMsg{}, err
-	}
-	defer func() {
-		if err != nil {
-			_ = tx.Rollback()
-		} else {
-			err = tx.Commit()
-		}
-	}()
-	var msg queueMsg
-	msg.QueueName = queue_name
-	// Implement the logic to peek a message from the queue
-	err = tx.QueryRow(`
+	return m.inTxWithQueueMsg(func(tx *sql.Tx) (queueMsg, error) {
+		var msg queueMsg
+		msg.QueueName = queue_name
+		// Implement the logic to peek a message from the queue
+		err = tx.QueryRow(`
 		SELECT 
 		q.id, q.msg, q.insert_ts, "" as receipt, q.global_id, q.partition_id
 		FROM queue q
 		LEFT JOIN acked a   
-			ON a.queue_info_id = q.queue_info_id AND a.global_id = q.global_id AND a.group_name = ? AND a.partition_id = ?
+			ON a.queue_info_id = q.queue_info_id 
+			AND a.global_id = q.global_id 
+			AND a.group_name = ? 
+			AND a.partition_id = ?
 		LEFT JOIN inflight i 
-			ON i.queue_info_id = q.queue_info_id AND i.q_id = q.id AND i.group_name = ? AND i.partition_id = ?
+			ON i.queue_info_id = q.queue_info_id 
+			AND i.q_id = q.id 
+			AND i.group_name = ? 
+			AND i.partition_id = ?
 		JOIN queue_info qi ON
 			qi.id = q.queue_info_id
 		WHERE
@@ -778,15 +775,16 @@ func (m *FileDBManager) PeekMessageWithMeta(queue_name, group string, partitionI
 		ORDER BY q.id ASC
 		LIMIT 1
 	`, group, partitionID,
-		group, partitionID,
-		queueInfoID, partitionID).Scan(&msg.ID, &msg.Msg, &msg.InsertTS, &msg.Receipt, &msg.GlobalID, &msg.PartitionID)
-	if err == sql.ErrNoRows {
-		return queueMsg{}, queue_error.ErrEmpty
-	}
-	if err != nil {
-		return queueMsg{}, err
-	}
-	return msg, nil
+			group, partitionID,
+			queueInfoID, partitionID).Scan(&msg.ID, &msg.Msg, &msg.InsertTS, &msg.Receipt, &msg.GlobalID, &msg.PartitionID)
+		if err == sql.ErrNoRows {
+			return queueMsg{}, queue_error.ErrEmpty
+		}
+		if err != nil {
+			return queueMsg{}, err
+		}
+		return msg, nil
+	})
 }
 
 func (m *FileDBManager) RenewMessage(queue_name, group string, msgID int64, receipt string, extendSec int) error {
@@ -807,6 +805,30 @@ func (m *FileDBManager) RenewMessageWithMeta(queue_name, group string, globalID,
 		return fmt.Errorf("queue not found: %s", queue_name)
 	}
 
+	return m.inTx(func(tx *sql.Tx) error {
+		res, err := tx.Exec(`
+			UPDATE inflight
+			SET lease_until = DATETIME('now', '+' || ? || ' seconds')
+			WHERE queue_info_id = ? AND group_name = ? AND global_id = ? AND receipt = ?
+			AND lease_until > CURRENT_TIMESTAMP
+		`, extendSec,
+			queueInfoID, group, globalID, receipt)
+		if err != nil {
+			return err
+		}
+
+		n, err := res.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return queue_error.ErrLeaseExpired
+		}
+		return nil
+	})
+}
+
+func (m *FileDBManager) inTx(txFunc func(tx *sql.Tx) error) error {
 	tx, err := m.db.Begin()
 	if err != nil {
 		return err
@@ -818,23 +840,38 @@ func (m *FileDBManager) RenewMessageWithMeta(queue_name, group string, globalID,
 			err = tx.Commit()
 		}
 	}()
-	res, err := tx.Exec(`
-		UPDATE inflight
-		SET lease_until = DATETIME('now', '+' || ? || ' seconds')
-		WHERE queue_info_id = ? AND group_name = ? AND global_id = ? AND receipt = ?
-		AND lease_until > CURRENT_TIMESTAMP
-	`, extendSec,
-		queueInfoID, group, globalID, receipt)
-	if err != nil {
-		return err
-	}
+	err = txFunc(tx)
+	return err
+}
 
-	n, err := res.RowsAffected()
+func (m *FileDBManager) inTxWithCount(txFunc func(tx *sql.Tx) (int64, error)) (int64, error) {
+	tx, err := m.db.Begin()
 	if err != nil {
-		return err
+		return 0, err
 	}
-	if n == 0 {
-		return queue_error.ErrLeaseExpired
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		} else {
+			err = tx.Commit()
+		}
+	}()
+	count, err := txFunc(tx)
+	return count, err
+}
+
+func (m *FileDBManager) inTxWithQueueMsg(txFunc func(tx *sql.Tx) (queueMsg, error)) (queueMsg, error) {
+	tx, err := m.db.Begin()
+	if err != nil {
+		return queueMsg{}, err
 	}
-	return nil
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		} else {
+			err = tx.Commit()
+		}
+	}()
+	queueMsg, err := txFunc(tx)
+	return queueMsg, err
 }
