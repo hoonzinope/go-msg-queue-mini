@@ -704,16 +704,11 @@ func (m *FileDBManager) GetAllStatus() ([]internal.QueueStatus, error) {
 	rows, err := m.db.Query(`
 	select 
 		qi.name as queue_name,
-		COUNT(q.id) as total_messages,
-		COUNT(*) as acked_messages,
-		COUNT(*) as inflight_messages,
-		COUNT(*) as dlq_messages
+		(select COUNT(*) from queue where queue_info_id = qi.id) as total_messages,
+		(select COUNT(*) from acked where queue_info_id = qi.id) as acked_messages,
+		(select COUNT(*) from inflight where queue_info_id = qi.id) as inflight_messages,
+		(select COUNT(*) from dlq where queue_info_id = qi.id) as dlq_messages
 	from queue_info qi
-	left join queue q on q.queue_info_id = qi.id
-	left join acked a on a.queue_info_id = qi.id
-	left join inflight i on i.queue_info_id = qi.id
-	left join dlq d on d.queue_info_id = qi.id
-	group by qi.id
 	`)
 	if err != nil {
 		return nil, err
