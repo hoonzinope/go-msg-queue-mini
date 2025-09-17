@@ -68,6 +68,11 @@ func TestQueueServiceEnqueueBatchSuccess(t *testing.T) {
 	if resp.GetStatus() != "ok" {
 		t.Fatalf("response status = %s, want ok", resp.GetStatus())
 	}
+
+	if resp.GetQueueName() != "test-queue" {
+		t.Fatalf("queue name = %s, want test-queue", resp.GetQueueName())
+	}
+
 	if resp.GetSuccessCount() != int64(mq.enqueueBatchResult) {
 		t.Fatalf("success count = %d, want %d", resp.GetSuccessCount(), mq.enqueueBatchResult)
 	}
@@ -141,4 +146,3 @@ func TestQueueServiceEnqueueBatchQueueError(t *testing.T) {
 		t.Fatalf("enqueue batch call count = %d, want 1", len(mq.enqueueBatchCalls))
 	}
 }
-

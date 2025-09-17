@@ -115,7 +115,7 @@ func (qs *queueServiceServer) EnqueueBatch(ctx context.Context, req *EnqueueBatc
 	if err != nil {
 		return nil, err
 	}
-	return &EnqueueBatchResponse{Status: "ok", SuccessCount: int64(successCount)}, nil
+	return &EnqueueBatchResponse{Status: "ok", QueueName: queue_name, SuccessCount: int64(successCount)}, nil
 }
 
 func (qs *queueServiceServer) Dequeue(ctx context.Context, req *DequeueRequest) (res *DequeueResponse, err error) {

@@ -432,13 +432,18 @@ func (m *FileDBManager) WriteMessagesBatchWithMeta(queue_name string, msgs [][]b
 	}
 	successCount := 0
 	err = m.inTx(func(tx *sql.Tx) error {
+		stmt, err := tx.Prepare(`
+			INSERT INTO queue 
+			(queue_info_id, msg, global_id, partition_id) 
+			VALUES (?, ?, ?, ?)`)
+		if err != nil {
+			return err
+		}
+		defer stmt.Close()
+
 		for _, msg := range msgs {
 			globalID := util.GenerateGlobalID()
-			_, insertErr := tx.Exec(`
-				INSERT INTO queue 
-				(queue_info_id, msg, global_id, partition_id) 
-				VALUES (?, ?, ?, ?)`,
-				queueInfoID, msg, globalID, partitionID)
+			_, insertErr := stmt.Exec(queueInfoID, msg, globalID, partitionID)
 			if insertErr != nil {
 				util.Error(fmt.Sprintf("Error writing message to queue: %v", insertErr))
 				return insertErr
