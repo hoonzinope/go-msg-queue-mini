@@ -107,6 +107,27 @@ func (q *fileDBQueue) Enqueue(queue_name string, item interface{}) error {
 	return nil
 }
 
+func (q *fileDBQueue) EnqueueBatch(queue_name string, items []interface{}) (int, error) {
+	successCount := 0
+	msgs := make([][]byte, 0, len(items))
+	for _, item := range items {
+		msg, err := json.Marshal(item)
+		if err != nil {
+			util.Error(fmt.Sprintf("Error marshaling message: %v", err))
+			return successCount, err
+		}
+		msgs = append(msgs, msg)
+	}
+
+	successCount, err := q.manager.WriteMessagesBatch(queue_name, msgs)
+	if err != nil {
+		util.Error(fmt.Sprintf("Error writing batch messages to queue: %v", err))
+		return successCount, err
+	}
+	q.MQMetrics.EnqueueCounter.WithLabelValues(queue_name).Add(float64(successCount))
+	return successCount, nil
+}
+
 func (q *fileDBQueue) Dequeue(queue_name, consumer_group string, consumer_id string) (internal.QueueMessage, error) {
 	unLock := q.Lock(queue_name, consumer_group)
 	defer unLock()

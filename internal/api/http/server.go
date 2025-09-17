@@ -101,6 +101,7 @@ func router(httpServerInstance *httpServerInstance) *gin.Engine {
 		writer.POST("/:queue_name/create", httpServerInstance.createQueueHandler)
 		writer.DELETE("/:queue_name/delete", httpServerInstance.deleteQueueHandler)
 		writer.POST("/:queue_name/enqueue", httpServerInstance.enqueueHandler)
+		writer.POST("/:queue_name/enqueue/batch", httpServerInstance.enqueueBatchHandler)
 		writer.POST("/:queue_name/dequeue", httpServerInstance.dequeueHandler)
 		writer.POST("/:queue_name/ack", httpServerInstance.ackHandler)
 		writer.POST("/:queue_name/nack", httpServerInstance.nackHandler)

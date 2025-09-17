@@ -8,7 +8,6 @@ package grpc
 
 import (
 	context "context"
-
 	grpc "google.golang.org/grpc"
 	codes "google.golang.org/grpc/codes"
 	status "google.golang.org/grpc/status"
@@ -20,16 +19,17 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	QueueService_HealthCheck_FullMethodName = "/queue.v1.QueueService/HealthCheck"
-	QueueService_CreateQueue_FullMethodName = "/queue.v1.QueueService/CreateQueue"
-	QueueService_DeleteQueue_FullMethodName = "/queue.v1.QueueService/DeleteQueue"
-	QueueService_Enqueue_FullMethodName     = "/queue.v1.QueueService/Enqueue"
-	QueueService_Dequeue_FullMethodName     = "/queue.v1.QueueService/Dequeue"
-	QueueService_Ack_FullMethodName         = "/queue.v1.QueueService/Ack"
-	QueueService_Nack_FullMethodName        = "/queue.v1.QueueService/Nack"
-	QueueService_Peek_FullMethodName        = "/queue.v1.QueueService/Peek"
-	QueueService_Renew_FullMethodName       = "/queue.v1.QueueService/Renew"
-	QueueService_Status_FullMethodName      = "/queue.v1.QueueService/Status"
+	QueueService_HealthCheck_FullMethodName  = "/queue.v1.QueueService/HealthCheck"
+	QueueService_CreateQueue_FullMethodName  = "/queue.v1.QueueService/CreateQueue"
+	QueueService_DeleteQueue_FullMethodName  = "/queue.v1.QueueService/DeleteQueue"
+	QueueService_Enqueue_FullMethodName      = "/queue.v1.QueueService/Enqueue"
+	QueueService_EnqueueBatch_FullMethodName = "/queue.v1.QueueService/EnqueueBatch"
+	QueueService_Dequeue_FullMethodName      = "/queue.v1.QueueService/Dequeue"
+	QueueService_Ack_FullMethodName          = "/queue.v1.QueueService/Ack"
+	QueueService_Nack_FullMethodName         = "/queue.v1.QueueService/Nack"
+	QueueService_Peek_FullMethodName         = "/queue.v1.QueueService/Peek"
+	QueueService_Renew_FullMethodName        = "/queue.v1.QueueService/Renew"
+	QueueService_Status_FullMethodName       = "/queue.v1.QueueService/Status"
 )
 
 // QueueServiceClient is the client API for QueueService service.
@@ -44,6 +44,8 @@ type QueueServiceClient interface {
 	DeleteQueue(ctx context.Context, in *DeleteQueueRequest, opts ...grpc.CallOption) (*DeleteQueueResponse, error)
 	// Enqueue: 메시지를 큐에 적재
 	Enqueue(ctx context.Context, in *EnqueueRequest, opts ...grpc.CallOption) (*EnqueueResponse, error)
+	// EnqueueBatch : 메세지 n개를 큐에 한번에 적재
+	EnqueueBatch(ctx context.Context, in *EnqueueBatchRequest, opts ...grpc.CallOption) (*EnqueueBatchResponse, error)
 	// Dequeue: 그룹/컨슈머 기준으로 메시지 하나를 임대(lease)하여 가져옴
 	// - 큐가 비었으면 NOT_FOUND로 반환 권장
 	// - 경합이면 ABORTED/FAILED_PRECONDITION 권장
@@ -103,6 +105,16 @@ func (c *queueServiceClient) Enqueue(ctx context.Context, in *EnqueueRequest, op
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(EnqueueResponse)
 	err := c.cc.Invoke(ctx, QueueService_Enqueue_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *queueServiceClient) EnqueueBatch(ctx context.Context, in *EnqueueBatchRequest, opts ...grpc.CallOption) (*EnqueueBatchResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(EnqueueBatchResponse)
+	err := c.cc.Invoke(ctx, QueueService_EnqueueBatch_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -181,6 +193,8 @@ type QueueServiceServer interface {
 	DeleteQueue(context.Context, *DeleteQueueRequest) (*DeleteQueueResponse, error)
 	// Enqueue: 메시지를 큐에 적재
 	Enqueue(context.Context, *EnqueueRequest) (*EnqueueResponse, error)
+	// EnqueueBatch : 메세지 n개를 큐에 한번에 적재
+	EnqueueBatch(context.Context, *EnqueueBatchRequest) (*EnqueueBatchResponse, error)
 	// Dequeue: 그룹/컨슈머 기준으로 메시지 하나를 임대(lease)하여 가져옴
 	// - 큐가 비었으면 NOT_FOUND로 반환 권장
 	// - 경합이면 ABORTED/FAILED_PRECONDITION 권장
@@ -217,6 +231,9 @@ func (UnimplementedQueueServiceServer) DeleteQueue(context.Context, *DeleteQueue
 }
 func (UnimplementedQueueServiceServer) Enqueue(context.Context, *EnqueueRequest) (*EnqueueResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Enqueue not implemented")
+}
+func (UnimplementedQueueServiceServer) EnqueueBatch(context.Context, *EnqueueBatchRequest) (*EnqueueBatchResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method EnqueueBatch not implemented")
 }
 func (UnimplementedQueueServiceServer) Dequeue(context.Context, *DequeueRequest) (*DequeueResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Dequeue not implemented")
@@ -325,6 +342,24 @@ func _QueueService_Enqueue_Handler(srv interface{}, ctx context.Context, dec fun
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(QueueServiceServer).Enqueue(ctx, req.(*EnqueueRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _QueueService_EnqueueBatch_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(EnqueueBatchRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(QueueServiceServer).EnqueueBatch(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: QueueService_EnqueueBatch_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(QueueServiceServer).EnqueueBatch(ctx, req.(*EnqueueBatchRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -459,6 +494,10 @@ var QueueService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Enqueue",
 			Handler:    _QueueService_Enqueue_Handler,
+		},
+		{
+			MethodName: "EnqueueBatch",
+			Handler:    _QueueService_EnqueueBatch_Handler,
 		},
 		{
 			MethodName: "Dequeue",

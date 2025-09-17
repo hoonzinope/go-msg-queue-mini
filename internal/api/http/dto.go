@@ -11,6 +11,15 @@ type EnqueueResponse struct {
 	Message json.RawMessage `json:"message"`
 }
 
+type EnqueueBatchRequest struct {
+	Messages []json.RawMessage `json:"messages" binding:"required"`
+}
+
+type EnqueueBatchResponse struct {
+	Status       string `json:"status"`
+	SuccessCount int    `json:"success_count"`
+}
+
 type DequeueRequest struct {
 	Group      string `json:"group" binding:"required"`
 	ConsumerID string `json:"consumer_id" binding:"required"`

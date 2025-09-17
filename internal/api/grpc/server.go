@@ -21,16 +21,17 @@ func StartServer(ctx context.Context, config *internal.Config, queue internal.Qu
 		return err
 	}
 	protectedMethods := map[string]bool{
-		"/queue.v1.QueueService/CreateQueue": true,
-		"/queue.v1.QueueService/DeleteQueue": true,
-		"/queue.v1.QueueService/Enqueue":     true,
-		"/queue.v1.QueueService/Dequeue":     true,
-		"/queue.v1.QueueService/Ack":         true,
-		"/queue.v1.QueueService/Nack":        true,
-		"/queue.v1.QueueService/Renew":       true,
-		"/queue.v1.QueueService/Peek":        false,
-		"/queue.v1.QueueService/Status":      false,
-		"/queue.v1.QueueService/HealthCheck": false,
+		"/queue.v1.QueueService/CreateQueue":  true,
+		"/queue.v1.QueueService/DeleteQueue":  true,
+		"/queue.v1.QueueService/Enqueue":      true,
+		"/queue.v1.QueueService/EnqueueBatch": true,
+		"/queue.v1.QueueService/Dequeue":      true,
+		"/queue.v1.QueueService/Ack":          true,
+		"/queue.v1.QueueService/Nack":         true,
+		"/queue.v1.QueueService/Renew":        true,
+		"/queue.v1.QueueService/Peek":         false,
+		"/queue.v1.QueueService/Status":       false,
+		"/queue.v1.QueueService/HealthCheck":  false,
 	}
 	grpcServer := grpc.NewServer(
 		grpc.ChainUnaryInterceptor(
@@ -95,6 +96,26 @@ func (qs *queueServiceServer) Enqueue(ctx context.Context, req *EnqueueRequest) 
 		return nil, err
 	}
 	return &EnqueueResponse{Status: "ok", Message: message}, nil
+}
+
+func (qs *queueServiceServer) EnqueueBatch(ctx context.Context, req *EnqueueBatchRequest) (res *EnqueueBatchResponse, err error) {
+	queue_name := req.GetQueueName()
+	if queue_name == "" {
+		return nil, fmt.Errorf("queue name is required")
+	}
+	messages := req.GetMessages()
+	if len(messages) == 0 {
+		return nil, fmt.Errorf("messages are required")
+	}
+	msgs := make([]interface{}, len(messages))
+	for i, msg := range messages {
+		msgs[i] = msg
+	}
+	successCount, err := qs.Queue.EnqueueBatch(queue_name, msgs)
+	if err != nil {
+		return nil, err
+	}
+	return &EnqueueBatchResponse{Status: "ok", QueueName: queue_name, SuccessCount: int64(successCount)}, nil
 }
 
 func (qs *queueServiceServer) Dequeue(ctx context.Context, req *DequeueRequest) (res *DequeueResponse, err error) {
