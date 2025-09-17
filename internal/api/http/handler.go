@@ -82,6 +82,39 @@ func (h *httpServerInstance) enqueueHandler(c *gin.Context) {
 	})
 }
 
+func (h *httpServerInstance) enqueueBatchHandler(c *gin.Context) {
+	queue_name, queueNameErr := getQueueName(c)
+	if queueNameErr != nil {
+		util.Error(queueNameErr.Error())
+		c.JSON(http.StatusBadRequest, gin.H{"error": queueNameErr.Error()})
+		return
+	}
+
+	var req EnqueueBatchRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		util.Error(fmt.Sprintf("Error binding JSON: %v", err))
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request payload"})
+		return
+	}
+
+	msgs := make([]interface{}, len(req.Messages))
+	for i, msg := range req.Messages {
+		msgs[i] = msg
+	}
+
+	successCount, err := h.Queue.EnqueueBatch(queue_name, msgs)
+	if err != nil {
+		util.Error(fmt.Sprintf("Error enqueuing messages: %v", err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to enqueue messages"})
+		return
+	}
+
+	c.JSON(http.StatusAccepted, EnqueueBatchResponse{
+		Status:       "enqueued",
+		SuccessCount: successCount,
+	})
+}
+
 func (h *httpServerInstance) dequeueHandler(c *gin.Context) {
 	queue_name, queueNameErr := getQueueName(c)
 	if queueNameErr != nil {

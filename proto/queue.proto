@@ -25,6 +25,9 @@ service QueueService {
   // Enqueue: 메시지를 큐에 적재
   rpc Enqueue(EnqueueRequest) returns (EnqueueResponse);
 
+  // EnqueueBatch : 메세지 n개를 큐에 한번에 적재
+  rpc EnqueueBatch(EnqueueBatchRequest) returns (EnqueueBatchResponse);
+
   // Dequeue: 그룹/컨슈머 기준으로 메시지 하나를 임대(lease)하여 가져옴
   // - 큐가 비었으면 NOT_FOUND로 반환 권장
   // - 경합이면 ABORTED/FAILED_PRECONDITION 권장
@@ -88,6 +91,19 @@ message EnqueueResponse {
   string status = 1;           // e.g., "enqueued"
   string queue_name = 2;
   string  message = 3;          // 원본 페이로드 에코백
+}
+
+// EnqueueBatch request
+message EnqueueBatchRequest {
+  string queue_name = 1;
+  repeated string messages = 2;
+}
+
+// EnqueueBatch response
+message EnqueueBatchResponse {
+  string status = 1;
+  string queue_name = 2;
+  int64 success_count = 3;
 }
 
 // HTTP: DequeueRequest{ group, consumer_id }
