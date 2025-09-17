@@ -421,12 +421,11 @@ func (m *FileDBManager) WriteMessageWithMeta(queue_name string, msg []byte, glob
 }
 
 func (m *FileDBManager) WriteMessagesBatch(queue_name string, msgs [][]byte) (int, error) {
-	gid := util.GenerateGlobalID()
 	pid := 0
-	return m.WriteMessagesBatchWithMeta(queue_name, msgs, gid, pid)
+	return m.WriteMessagesBatchWithMeta(queue_name, msgs, pid)
 }
 
-func (m *FileDBManager) WriteMessagesBatchWithMeta(queue_name string, msgs [][]byte, globalID string, partitionID int) (int, error) {
+func (m *FileDBManager) WriteMessagesBatchWithMeta(queue_name string, msgs [][]byte, partitionID int) (int, error) {
 	queueInfoID, err := m.getQueueInfoID(queue_name)
 	if err != nil {
 		return 0, err
@@ -434,6 +433,7 @@ func (m *FileDBManager) WriteMessagesBatchWithMeta(queue_name string, msgs [][]b
 	successCount := 0
 	err = m.inTx(func(tx *sql.Tx) error {
 		for _, msg := range msgs {
+			globalID := util.GenerateGlobalID()
 			_, insertErr := tx.Exec(`
 				INSERT INTO queue 
 				(queue_info_id, msg, global_id, partition_id) 
