@@ -11,11 +11,12 @@ type QueueClient struct {
 	Logger    *slog.Logger
 }
 
-func NewQueue(queueName string, queue internal.Queue) *QueueClient {
+func NewQueue(queueName string, queue internal.Queue, logger *slog.Logger) *QueueClient {
 	// TODO : implement NewQueue logic
 	return &QueueClient{
 		QueueName: queueName,
 		Queue:     queue,
+		Logger:    logger,
 	}
 }
 

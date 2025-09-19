@@ -697,7 +697,13 @@ func (m *FileDBManager) NackMessageWithMeta(
 		VALUES (?, ?, ?, ?)`, queueInfoID, group, partitionID, globalID); err != nil {
 				return err
 			}
-			fmt.Printf("Message %s exceeded max deliveries (%d). Moving to DLQ.\n", globalID, maxDeliveries)
+			m.logger.Warn("Message exceeded max deliveries, moved to DLQ",
+				"queue", queue_name,
+				"group", group,
+				"global_id", globalID,
+				"partition_id", partitionID,
+				"max_deliveries", maxDeliveries,
+			)
 		}
 		return nil
 	})

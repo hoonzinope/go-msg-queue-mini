@@ -10,6 +10,7 @@ import (
 	fileDBQueue "go-msg-queue-mini/internal/core"
 	runner "go-msg-queue-mini/internal/runner"
 	"go-msg-queue-mini/util"
+	"log"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -28,6 +29,10 @@ func main() {
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	config, err := readConfig("config.yml", ".env")
+	if err != nil {
+		log.Fatalf("Error reading config: %v", err)
+		return
+	}
 	loggerType := "json"
 	if config.Debug {
 		loggerType = "text"
@@ -36,10 +41,6 @@ func main() {
 	}
 	logger = util.InitLogger(loggerType)
 
-	if err != nil {
-		logger.Error("Error reading config", "error", err)
-		return
-	}
 	queue, err = buildQueue(config, logger)
 	if err != nil {
 		logger.Error("Error initializing queue", "error", err)
@@ -100,12 +101,10 @@ func main() {
 func readConfig(config_path, env_path string) (*internal.Config, error) {
 	err := godotenv.Load(env_path)
 	if err != nil {
-		logger.Error("Error loading .env file", "error", err)
 		return nil, err
 	}
 	config, err := internal.ReadConfig(config_path)
 	if err != nil {
-		logger.Error("Error reading config", "error", err)
 		return nil, err
 	}
 	return config, nil
