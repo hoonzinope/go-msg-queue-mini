@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"go-msg-queue-mini/internal"
 	queue_error "go-msg-queue-mini/internal/queue_error"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -20,6 +21,7 @@ type FileDBManager struct {
 	stopSync     sync.Once
 	queueType    string
 	queueNameMap sync.Map // key: queue name, value: queue info id
+	logger       *slog.Logger
 }
 
 type queueMsg struct {
@@ -34,7 +36,7 @@ type queueMsg struct {
 
 var OneDayInSeconds = 24 * 60 * 60 // 24 hours
 
-func NewFileDBManager(dsn string, queueType string) (*FileDBManager, error) {
+func NewFileDBManager(dsn string, queueType string, logger *slog.Logger) (*FileDBManager, error) {
 	db, err := sql.Open("sqlite3", dsn) // dsn: "file:/path/db.sqlite3"
 	if err != nil {
 		return nil, err
@@ -48,6 +50,7 @@ func NewFileDBManager(dsn string, queueType string) (*FileDBManager, error) {
 		stopChan:  make(chan struct{}),
 		doneChan:  make(chan struct{}),
 		queueType: queueType,
+		logger:    logger,
 	}
 	if err := fm.initDB(); err != nil {
 		_ = db.Close()
@@ -72,17 +75,17 @@ func (m *FileDBManager) intervalJob() error {
 			// 1. queue 테이블에서 오래된 항목 삭제
 			deleteMsgCnt, err := m.deleteQueueMsg()
 			if err != nil {
-				util.Error(fmt.Sprintf("Error deleting queue messages: %v", err))
+				m.logger.Warn("Error deleting queue messages", "error", err)
 			}
 			// 2. acked 테이블에서 오래된 항목 삭제
 			deleteAckedCnt, err := m.deleteAckedMsg()
 			if err != nil {
-				util.Error(fmt.Sprintf("Error deleting acked messages: %v", err))
+				m.logger.Warn("Error deleting acked messages", "error", err)
 			}
 			// 3. 실제로 지워진 데이터가 있을 경우, vacuum -> db 파일 크기 줄이기
 			if (deleteAckedCnt + deleteMsgCnt) > 0 {
 				if err := m.vacuum(); err != nil {
-					util.Error(fmt.Sprintf("Error during vacuum: %v", err))
+					m.logger.Warn("Error during vacuum", "error", err)
 				}
 			}
 		case <-m.stopChan:
@@ -138,7 +141,6 @@ func (m *FileDBManager) deleteAckedMsg() (int64, error) {
 
 func (m *FileDBManager) vacuum() error {
 	if _, err := m.db.Exec(`PRAGMA incremental_vacuum(1);`); err != nil {
-		util.Error(fmt.Sprintf("Error during vacuum: %v", err))
 		return err
 	}
 	return nil
@@ -151,7 +153,7 @@ func (m *FileDBManager) Close() error {
 	select {
 	case <-m.doneChan:
 	case <-time.After(3 * time.Second):
-		util.Error("Timeout waiting for interval job to stop")
+		m.logger.Info("Timeout waiting for interval job to stop")
 	}
 	return m.db.Close()
 }
@@ -445,7 +447,6 @@ func (m *FileDBManager) WriteMessagesBatchWithMeta(queue_name string, msgs [][]b
 			globalID := util.GenerateGlobalID()
 			_, insertErr := stmt.Exec(queueInfoID, msg, globalID, partitionID)
 			if insertErr != nil {
-				util.Error(fmt.Sprintf("Error writing message to queue: %v", insertErr))
 				return insertErr
 			}
 			successCount++
@@ -696,7 +697,13 @@ func (m *FileDBManager) NackMessageWithMeta(
 		VALUES (?, ?, ?, ?)`, queueInfoID, group, partitionID, globalID); err != nil {
 				return err
 			}
-			fmt.Printf("Message %s exceeded max deliveries (%d). Moving to DLQ.\n", globalID, maxDeliveries)
+			m.logger.Warn("Message exceeded max deliveries, moved to DLQ",
+				"queue", queue_name,
+				"group", group,
+				"global_id", globalID,
+				"partition_id", partitionID,
+				"max_deliveries", maxDeliveries,
+			)
 		}
 		return nil
 	})

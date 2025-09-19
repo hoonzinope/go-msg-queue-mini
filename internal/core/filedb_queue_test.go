@@ -2,6 +2,8 @@ package core
 
 import (
 	"errors"
+	"log/slog"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -21,7 +23,8 @@ func newTestConfig() *internal.Config {
 }
 
 func TestFileDBQueueEnqueueBatchSuccess(t *testing.T) {
-	queue, err := NewFileDBQueue(newTestConfig())
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	queue, err := NewFileDBQueue(newTestConfig(), logger)
 	if err != nil {
 		t.Fatalf("failed to create filedb queue: %v", err)
 	}
@@ -65,7 +68,8 @@ func TestFileDBQueueEnqueueBatchSuccess(t *testing.T) {
 }
 
 func TestFileDBQueueEnqueueBatchQueueNotFound(t *testing.T) {
-	queue, err := NewFileDBQueue(newTestConfig())
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	queue, err := NewFileDBQueue(newTestConfig(), logger)
 	if err != nil {
 		t.Fatalf("failed to create filedb queue: %v", err)
 	}

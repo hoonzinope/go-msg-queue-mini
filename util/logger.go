@@ -1,24 +1,29 @@
 package util
 
 import (
-	"log"
+	"log/slog"
 	"os"
+	"time"
 )
 
-var (
-	infoLog  *log.Logger
-	errorLog *log.Logger
-)
+func InitLogger(loggerType string) *slog.Logger {
+	opts := &slog.HandlerOptions{
+		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
+			if a.Key == slog.TimeKey {
+				if t, ok := a.Value.Any().(time.Time); ok {
+					a.Value = slog.StringValue(t.Format("2006-01-02 15:04:05"))
+				}
+			}
+			return a
+		},
+	}
 
-func init() {
-	infoLog = log.New(os.Stdout, "INFO: ", log.Ldate|log.Ltime|log.Lshortfile)
-	errorLog = log.New(os.Stderr, "ERROR: ", log.Ldate|log.Ltime|log.Lshortfile)
-}
-
-func Info(v ...interface{}) {
-	infoLog.Println(v...)
-}
-
-func Error(v ...interface{}) {
-	errorLog.Println(v...)
+	var handler slog.Handler
+	if loggerType == "text" {
+		handler = slog.NewTextHandler(os.Stdout, opts)
+	} else {
+		handler = slog.NewJSONHandler(os.Stdout, opts)
+	}
+	Logger := slog.New(handler)
+	return Logger.With(slog.String("app", "go-msg-queue-mini"))
 }

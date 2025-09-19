@@ -7,7 +7,7 @@ import (
 	"go-msg-queue-mini/internal"
 	"go-msg-queue-mini/internal/metrics"
 	"go-msg-queue-mini/internal/queue_error"
-	"go-msg-queue-mini/util"
+	"log/slog"
 	"os"
 	"sync"
 	"time"
@@ -22,9 +22,10 @@ type fileDBQueue struct {
 	MQMetrics      *metrics.MQMetrics
 	stopStatusChan chan struct{}
 	registerOnce   sync.Once
+	logger         *slog.Logger
 }
 
-func NewFileDBQueue(config *internal.Config) (*fileDBQueue, error) {
+func NewFileDBQueue(config *internal.Config, logger *slog.Logger) (*fileDBQueue, error) {
 	dbpath := ""
 	queueType := config.Persistence.Type
 	switch queueType {
@@ -58,7 +59,7 @@ func NewFileDBQueue(config *internal.Config) (*fileDBQueue, error) {
 		return nil, fmt.Errorf("invalid lease duration: %w", err)
 	}
 
-	manager, err := NewFileDBManager(dbpath, queueType)
+	manager, err := NewFileDBManager(dbpath, queueType, logger)
 	if err != nil {
 		return nil, err
 	}
@@ -70,6 +71,7 @@ func NewFileDBQueue(config *internal.Config) (*fileDBQueue, error) {
 		leaseDuration:  leaseDuration,
 		MQMetrics:      metrics.NewMQMetrics(),
 		stopStatusChan: make(chan struct{}),
+		logger:         logger,
 	}
 	go fq.intervalStatusMetrics()
 	return fq, nil
@@ -100,7 +102,7 @@ func (q *fileDBQueue) Enqueue(queue_name string, item interface{}) error {
 		return err
 	}
 	if err := q.manager.WriteMessage(queue_name, msg); err != nil {
-		fmt.Println("Error writing message to queue:", err)
+		q.logger.Error("Error writing message to queue", "error", err)
 		return err
 	}
 	q.MQMetrics.EnqueueCounter.WithLabelValues(queue_name).Inc()
@@ -113,7 +115,7 @@ func (q *fileDBQueue) EnqueueBatch(queue_name string, items []interface{}) (int,
 	for _, item := range items {
 		msg, err := json.Marshal(item)
 		if err != nil {
-			util.Error(fmt.Sprintf("Error marshaling message: %v", err))
+			q.logger.Error("Error marshaling message", "error", err)
 			return successCount, err
 		}
 		msgs = append(msgs, msg)
@@ -121,7 +123,7 @@ func (q *fileDBQueue) EnqueueBatch(queue_name string, items []interface{}) (int,
 
 	successCount, err := q.manager.WriteMessagesBatch(queue_name, msgs)
 	if err != nil {
-		util.Error(fmt.Sprintf("Error writing batch messages to queue: %v", err))
+		q.logger.Error("Error writing batch messages to queue", "error", err)
 		return successCount, err
 	}
 	q.MQMetrics.EnqueueCounter.WithLabelValues(queue_name).Add(float64(successCount))
@@ -173,7 +175,7 @@ func (q *fileDBQueue) Dequeue(queue_name, consumer_group string, consumer_id str
 
 func (q *fileDBQueue) Ack(queue_name, consumer_group string, msg_id int64, receipt string) error {
 	if err := q.manager.AckMessage(queue_name, consumer_group, msg_id, receipt); err != nil {
-		util.Error(fmt.Sprintf("Error acknowledging message: %v", err))
+		q.logger.Error("Error acknowledging message", "error", err)
 		return err
 	}
 	q.MQMetrics.AckCounter.WithLabelValues(queue_name).Inc()
@@ -184,7 +186,7 @@ func (q *fileDBQueue) Nack(queue_name, consumer_group string, msg_id int64, rece
 	maxRetry := q.maxRetry
 	retryInterval := q.retryInterval
 	if err := q.manager.NackMessage(queue_name, consumer_group, msg_id, receipt, retryInterval, maxRetry, "Nack Message"); err != nil {
-		util.Error(fmt.Sprintf("Error not acknowledging message: %v", err))
+		q.logger.Error("Error not acknowledging message", "error", err)
 		return err
 	}
 	q.MQMetrics.NackCounter.WithLabelValues(queue_name).Inc()
@@ -196,7 +198,7 @@ func (q *fileDBQueue) Shutdown() error {
 		close(q.stopStatusChan)
 	})
 	if err := q.manager.Close(); err != nil {
-		util.Error(fmt.Sprintf("Error shutting down queue: %v", err))
+		q.logger.Error("Error shutting down queue", "error", err)
 		return err
 	}
 	return nil
@@ -247,7 +249,7 @@ func (q *fileDBQueue) intervalStatusMetrics() {
 func (q *fileDBQueue) statusMetrics() {
 	statuses, err := q.manager.GetAllStatus()
 	if err != nil {
-		util.Error(fmt.Sprintf("Error getting all queue statuses: %v", err))
+		q.logger.Error("Error getting all queue statuses", "error", err)
 		return
 	}
 	for _, status := range statuses {

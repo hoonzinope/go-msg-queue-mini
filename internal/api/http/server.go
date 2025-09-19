@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"go-msg-queue-mini/internal"
-	"go-msg-queue-mini/util"
+	"log/slog"
 	"net/http"
 	"sync"
 	"time"
@@ -32,9 +32,11 @@ type httpServerInstance struct {
 	Queue   internal.Queue
 	ApiKey  string
 	limiter RateLimiter
+	Logger  *slog.Logger
 }
 
-func StartServer(ctx context.Context, config *internal.Config, queue internal.Queue) error {
+func StartServer(
+	ctx context.Context, config *internal.Config, queue internal.Queue, logger *slog.Logger) error {
 	// Start the HTTP server
 	addr := config.HTTP.Port
 	if addr == 0 {
@@ -53,6 +55,7 @@ func StartServer(ctx context.Context, config *internal.Config, queue internal.Qu
 		Queue:   queue,
 		ApiKey:  config.HTTP.Auth.APIKey,
 		limiter: rateLimiter,
+		Logger:  logger,
 	}
 
 	server := &http.Server{
@@ -64,7 +67,7 @@ func StartServer(ctx context.Context, config *internal.Config, queue internal.Qu
 		<-ctx.Done()
 		err := server.Shutdown(context.Background())
 		if err != nil {
-			util.Error(fmt.Sprintf("Error shutting down server: %v", err))
+			logger.Error("Error shutting down server", "error", err)
 		}
 	}()
 
