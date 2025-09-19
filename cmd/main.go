@@ -10,6 +10,7 @@ import (
 	fileDBQueue "go-msg-queue-mini/internal/core"
 	runner "go-msg-queue-mini/internal/runner"
 	"go-msg-queue-mini/util"
+	"log/slog"
 	"os"
 	"os/signal"
 	"sync"
@@ -19,34 +20,44 @@ import (
 )
 
 var ctx, cancel = context.WithCancel(context.Background())
+var logger *slog.Logger
 var queue internal.Queue
 
 func main() {
-	util.Info("Starting message queue...")
+
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-
 	config, err := readConfig("config.yml", ".env")
+	loggerType := "json"
+	if config.Debug {
+		loggerType = "text"
+	} else {
+		loggerType = "json"
+	}
+	logger = util.InitLogger(loggerType)
+
 	if err != nil {
-		util.Error(fmt.Sprintf("Error reading config: %v", err))
+		logger.Error("Error reading config", "error", err)
 		return
 	}
-	queue, err = buildQueue(config)
+	queue, err = buildQueue(config, logger)
 	if err != nil {
-		util.Error(fmt.Sprintf("Error initializing queue: %v", err))
+		logger.Error("Error initializing queue", "error", err)
 		return
 	}
+	logger.Info("Starting message queue")
 
 	wg := sync.WaitGroup{}
-	client := &client.QueueClient{
-		Queue:     queue,
-		QueueName: "default",
-	}
 	if config.Debug {
+		client := &client.QueueClient{
+			Queue:     queue,
+			QueueName: "default",
+			Logger:    logger,
+		}
 		var groupName string = "default"
 		err := client.Queue.CreateQueue(client.QueueName)
 		if err != nil {
-			util.Error(fmt.Sprintf("Error creating queue: %v", err))
+			logger.Error("Error creating queue", "error", err)
 			return
 		}
 		debugMode(&wg, ctx, client, groupName)
@@ -55,9 +66,9 @@ func main() {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				err := http.StartServer(ctx, config, queue)
+				err := http.StartServer(ctx, config, queue, logger)
 				if err != nil {
-					util.Error(fmt.Sprintf("Error starting HTTP server: %v", err))
+					logger.Error("Error starting HTTP server", "error", err)
 				}
 			}()
 		}
@@ -66,53 +77,54 @@ func main() {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				err := grpc.StartServer(ctx, config, queue)
+				err := grpc.StartServer(ctx, config, queue, logger)
 				if err != nil {
-					util.Error(fmt.Sprintf("Error starting gRPC server: %v", err))
+					logger.Error("Error starting gRPC server", "error", err)
 				}
 			}()
 		}
 	}
 
-	util.Info("Message queue is running. Press Ctrl+C to stop.")
+	logger.Info("Message queue is running. Press Ctrl+C to stop.")
 
 	<-quit
-	util.Info("Shutting down...")
+	logger.Info("Shutting down...")
 	cancel()  // Cancel the context to stop all goroutines
 	wg.Wait() // Wait for all goroutines to finish
 	if err := queue.Shutdown(); err != nil {
-		util.Error(fmt.Sprintf("Error shutting down queue: %v", err))
+		logger.Error("Error shutting down queue", "error", err)
 	}
-	util.Info("Message queue stopped.")
+	logger.Info("Message queue stopped.")
 }
 
 func readConfig(config_path, env_path string) (*internal.Config, error) {
 	err := godotenv.Load(env_path)
 	if err != nil {
-		util.Error(fmt.Sprintf("Error loading .env file: %v", err))
+		logger.Error("Error loading .env file", "error", err)
 		return nil, err
 	}
 	config, err := internal.ReadConfig(config_path)
 	if err != nil {
-		util.Error(fmt.Sprintf("Error reading config: %v", err))
+		logger.Error("Error reading config", "error", err)
 		return nil, err
 	}
 	return config, nil
 }
 
-func buildQueue(config *internal.Config) (internal.Queue, error) {
+func buildQueue(config *internal.Config, logger *slog.Logger) (internal.Queue, error) {
 	switch config.Persistence.Type {
 	case "", "memory":
-		return fileDBQueue.NewFileDBQueue(config)
+		return fileDBQueue.NewFileDBQueue(config, logger)
 	case "file":
-		return fileDBQueue.NewFileDBQueue(config)
+		return fileDBQueue.NewFileDBQueue(config, logger)
 	default:
+		logger.Error("Unsupported persistence type", "type", config.Persistence.Type)
 		return nil, fmt.Errorf("unsupported persistence type: %s", config.Persistence.Type)
 	}
 }
 
 func debugMode(wg *sync.WaitGroup, ctx context.Context, client *client.QueueClient, groupName string) {
-	util.Info("Debug mode is enabled")
+	logger.Info("Debug mode is enabled")
 
 	for i := 0; i < 1; i++ {
 		wg.Add(1)

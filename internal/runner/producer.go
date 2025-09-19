@@ -2,9 +2,9 @@ package internal
 
 import (
 	"context"
-	"fmt"
 	"go-msg-queue-mini/client"
 	"go-msg-queue-mini/util"
+	"log/slog"
 	"time"
 )
 
@@ -28,10 +28,11 @@ func (p *Producer) Produce(ctx context.Context) {
 }
 
 func (p *Producer) produce(item interface{}) {
+	logger := p.Client.Logger
 	err := p.Client.Produce(item)
 	if err != nil {
-		util.Error(fmt.Sprintf("Error producing item by %s: %v", p.Name, err))
+		logger.Error("Error producing item", slog.String("producer", p.Name), slog.String("error", err.Error()))
 		return
 	}
-	util.Info(fmt.Sprintf("Produced by %s: %s", p.Name, item.(string))) // Log the produced item
+	logger.Info("Produced item", slog.String("producer", p.Name), slog.String("item", item.(string)))
 }

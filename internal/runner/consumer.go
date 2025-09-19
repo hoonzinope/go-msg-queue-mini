@@ -3,10 +3,10 @@ package internal
 import (
 	"context"
 	"errors"
-	"fmt"
 	"go-msg-queue-mini/client"
 	"go-msg-queue-mini/internal/queue_error"
 	"go-msg-queue-mini/util"
+	"log/slog"
 	"time"
 )
 
@@ -28,6 +28,7 @@ func (c *Consumer) Consume(ctx context.Context) {
 }
 
 func (c *Consumer) consume() {
+	logger := c.Client.Logger
 	err := c.Client.Consume(c.Group, c.Name, func(item interface{}) error {
 		// Simulate message processing
 		processTime := util.GenerateNumber(1, 2)
@@ -36,7 +37,7 @@ func (c *Consumer) consume() {
 		if util.GenerateNumber(1, 10) > 8 {
 			return errors.New("simulated processing error")
 		}
-		util.Info(fmt.Sprintf("Consumed by %s: %s", c.Name, item.(string)))
+		logger.Info("Consumed message", slog.String("consumer", c.Name), slog.String("message", item.(string)))
 		return nil
 	})
 	if err != nil {
@@ -44,9 +45,9 @@ func (c *Consumer) consume() {
 		case queue_error.ErrEmpty:
 			// pass
 		case queue_error.ErrContended:
-			util.Error(fmt.Sprintf("Error consuming item by %s: %v", c.Name, err))
+			logger.Error("Error consuming item", slog.String("consumer", c.Name), slog.String("error", err.Error()))
 		default:
-			util.Error(fmt.Sprintf("Error consuming item by %s: %v", c.Name, err))
+			logger.Error("Error consuming item", slog.String("consumer", c.Name), slog.String("error", err.Error()))
 		}
 		sleepTime := util.GenerateNumber(1, 2)
 		time.Sleep(time.Duration(sleepTime) * time.Second)

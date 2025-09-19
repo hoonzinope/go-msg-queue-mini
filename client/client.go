@@ -1,14 +1,14 @@
 package client
 
 import (
-	"fmt"
 	"go-msg-queue-mini/internal"
-	"go-msg-queue-mini/util"
+	"log/slog"
 )
 
 type QueueClient struct {
 	QueueName string
 	Queue     internal.Queue
+	Logger    *slog.Logger
 }
 
 func NewQueue(queueName string, queue internal.Queue) *QueueClient {
@@ -38,7 +38,7 @@ func (qc *QueueClient) Consume(groupName string, consumerID string, processFunc 
 		if nackErr := qc.Queue.Nack(qc.QueueName, groupName, message.ID, message.Receipt); nackErr != nil {
 			return nackErr
 		}
-		util.Error(fmt.Sprintf("%s Processing error, message %v NACKed", consumerID, message.Payload))
+		qc.Logger.Error("Processing error", slog.String("consumer", consumerID), slog.Any("message", message.Payload))
 		return err
 	}
 	// Only ACK when processing succeeds.

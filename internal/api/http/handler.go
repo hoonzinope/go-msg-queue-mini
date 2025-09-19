@@ -2,9 +2,7 @@ package http
 
 import (
 	"errors"
-	"fmt"
 	"go-msg-queue-mini/internal/queue_error"
-	"go-msg-queue-mini/util"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -25,13 +23,13 @@ func getQueueName(c *gin.Context) (string, error) {
 func (h *httpServerInstance) createQueueHandler(c *gin.Context) {
 	queue_name, queueNameErr := getQueueName(c)
 	if queueNameErr != nil {
-		util.Error(queueNameErr.Error())
+		h.Logger.Error("Error getting queue name", "error", queueNameErr)
 		c.JSON(http.StatusBadRequest, gin.H{"error": queueNameErr.Error()})
 		return
 	}
 	err := h.Queue.CreateQueue(queue_name)
 	if err != nil {
-		util.Error(fmt.Sprintf("Error creating queue: %v", err))
+		h.Logger.Error("Error creating queue", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create queue"})
 		return
 	}
@@ -41,13 +39,13 @@ func (h *httpServerInstance) createQueueHandler(c *gin.Context) {
 func (h *httpServerInstance) deleteQueueHandler(c *gin.Context) {
 	queue_name, queueNameErr := getQueueName(c)
 	if queueNameErr != nil {
-		util.Error(queueNameErr.Error())
+		h.Logger.Error("Error getting queue name", "error", queueNameErr)
 		c.JSON(http.StatusBadRequest, gin.H{"error": queueNameErr.Error()})
 		return
 	}
 	err := h.Queue.DeleteQueue(queue_name)
 	if err != nil {
-		util.Error(fmt.Sprintf("Error deleting queue: %v", err))
+		h.Logger.Error("Error deleting queue", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete queue"})
 		return
 	}
@@ -57,21 +55,21 @@ func (h *httpServerInstance) deleteQueueHandler(c *gin.Context) {
 func (h *httpServerInstance) enqueueHandler(c *gin.Context) {
 	queue_name, queueNameErr := getQueueName(c)
 	if queueNameErr != nil {
-		util.Error(queueNameErr.Error())
+		h.Logger.Error("Error getting queue name", "error", queueNameErr)
 		c.JSON(http.StatusBadRequest, gin.H{"error": queueNameErr.Error()})
 		return
 	}
 
 	var req EnqueueRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		util.Error(fmt.Sprintf("Error binding JSON: %v", err))
+		h.Logger.Error("Error binding JSON", "error", err)
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request payload"})
 		return
 	}
 
 	err := h.Queue.Enqueue(queue_name, req.Message)
 	if err != nil {
-		util.Error(fmt.Sprintf("Error enqueuing message: %v", err))
+		h.Logger.Error("Error enqueuing message", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to enqueue message"})
 		return
 	}
@@ -85,14 +83,14 @@ func (h *httpServerInstance) enqueueHandler(c *gin.Context) {
 func (h *httpServerInstance) enqueueBatchHandler(c *gin.Context) {
 	queue_name, queueNameErr := getQueueName(c)
 	if queueNameErr != nil {
-		util.Error(queueNameErr.Error())
+		h.Logger.Error("Error getting queue name", "error", queueNameErr)
 		c.JSON(http.StatusBadRequest, gin.H{"error": queueNameErr.Error()})
 		return
 	}
 
 	var req EnqueueBatchRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		util.Error(fmt.Sprintf("Error binding JSON: %v", err))
+		h.Logger.Error("Error binding JSON", "error", err)
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request payload"})
 		return
 	}
@@ -104,7 +102,7 @@ func (h *httpServerInstance) enqueueBatchHandler(c *gin.Context) {
 
 	successCount, err := h.Queue.EnqueueBatch(queue_name, msgs)
 	if err != nil {
-		util.Error(fmt.Sprintf("Error enqueuing messages: %v", err))
+		h.Logger.Error("Error enqueuing messages", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to enqueue messages"})
 		return
 	}
@@ -118,13 +116,13 @@ func (h *httpServerInstance) enqueueBatchHandler(c *gin.Context) {
 func (h *httpServerInstance) dequeueHandler(c *gin.Context) {
 	queue_name, queueNameErr := getQueueName(c)
 	if queueNameErr != nil {
-		util.Error(queueNameErr.Error())
+		h.Logger.Error("Error getting queue name", "error", queueNameErr)
 		c.JSON(http.StatusBadRequest, gin.H{"error": queueNameErr.Error()})
 		return
 	}
 	var req DequeueRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		util.Error(fmt.Sprintf("Error binding JSON: %v", err))
+		h.Logger.Error("Error binding JSON", "error", err)
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request payload"})
 		return
 	}
@@ -134,10 +132,10 @@ func (h *httpServerInstance) dequeueHandler(c *gin.Context) {
 		if errors.Is(err, queue_error.ErrEmpty) {
 			c.Status(http.StatusNoContent)
 		} else if errors.Is(err, queue_error.ErrContended) {
-			util.Error(fmt.Sprintf("Error dequeuing message: %v", err))
+			h.Logger.Error("Error dequeuing message", "error", err)
 			c.JSON(http.StatusConflict, gin.H{"status": "message is being processed"})
 		} else {
-			util.Error(fmt.Sprintf("Error dequeuing message: %v", err))
+			h.Logger.Error("Error dequeuing message", "error", err)
 			c.JSON(http.StatusBadRequest, gin.H{"error": "failed to dequeue message"})
 		}
 		return
@@ -155,20 +153,20 @@ func (h *httpServerInstance) dequeueHandler(c *gin.Context) {
 func (h *httpServerInstance) ackHandler(c *gin.Context) {
 	queue_name, queueNameErr := getQueueName(c)
 	if queueNameErr != nil {
-		util.Error(queueNameErr.Error())
+		h.Logger.Error("Error getting queue name", "error", queueNameErr)
 		c.JSON(http.StatusBadRequest, gin.H{"error": queueNameErr.Error()})
 		return
 	}
 	var req AckRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		util.Error(fmt.Sprintf("Error binding JSON: %v", err))
+		h.Logger.Error("Error binding JSON", "error", err)
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request payload"})
 		return
 	}
 
 	err := h.Queue.Ack(queue_name, req.Group, req.MessageID, req.Receipt)
 	if err != nil {
-		util.Error(fmt.Sprintf("Error ACKing message: %v", err))
+		h.Logger.Error("Error ACKing message", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to ack message"})
 		return
 	}
@@ -178,20 +176,20 @@ func (h *httpServerInstance) ackHandler(c *gin.Context) {
 func (h *httpServerInstance) nackHandler(c *gin.Context) {
 	queue_name, queueNameErr := getQueueName(c)
 	if queueNameErr != nil {
-		util.Error(queueNameErr.Error())
+		h.Logger.Error("Error getting queue name", "error", queueNameErr)
 		c.JSON(http.StatusBadRequest, gin.H{"error": queueNameErr.Error()})
 		return
 	}
 	var req NackRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		util.Error(fmt.Sprintf("Error binding JSON: %v", err))
+		h.Logger.Error("Error binding JSON", "error", err)
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request payload"})
 		return
 	}
 
 	err := h.Queue.Nack(queue_name, req.Group, req.MessageID, req.Receipt)
 	if err != nil {
-		util.Error(fmt.Sprintf("Error NACKing message: %v", err))
+		h.Logger.Error("Error NACKing message", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to nack message"})
 		return
 	}
@@ -201,13 +199,13 @@ func (h *httpServerInstance) nackHandler(c *gin.Context) {
 func (h *httpServerInstance) statusHandler(c *gin.Context) {
 	queue_name, queueNameErr := getQueueName(c)
 	if queueNameErr != nil {
-		util.Error(queueNameErr.Error())
+		h.Logger.Error("Error getting queue name", "error", queueNameErr)
 		c.JSON(http.StatusBadRequest, gin.H{"error": queueNameErr.Error()})
 		return
 	}
 	status, err := h.Queue.Status(queue_name)
 	if err != nil {
-		util.Error(fmt.Sprintf("Error getting queue status: %v", err))
+		h.Logger.Error("Error getting queue status", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get queue status"})
 		return
 	}
@@ -227,13 +225,13 @@ func (h *httpServerInstance) statusHandler(c *gin.Context) {
 func (h *httpServerInstance) peekHandler(c *gin.Context) {
 	queue_name, queueNameErr := getQueueName(c)
 	if queueNameErr != nil {
-		util.Error(queueNameErr.Error())
+		h.Logger.Error("Error getting queue name", "error", queueNameErr)
 		c.JSON(http.StatusBadRequest, gin.H{"error": queueNameErr.Error()})
 		return
 	}
 	var req PeekRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		util.Error(fmt.Sprintf("Error binding JSON: %v", err))
+		h.Logger.Error("Error binding JSON", "error", err)
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request payload"})
 		return
 	}
@@ -244,7 +242,7 @@ func (h *httpServerInstance) peekHandler(c *gin.Context) {
 			c.Status(http.StatusNoContent)
 			return
 		}
-		util.Error(fmt.Sprintf("Error peeking message: %v", err))
+		h.Logger.Error("Error peeking message", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to peek message"})
 		return
 	}
@@ -262,13 +260,13 @@ func (h *httpServerInstance) peekHandler(c *gin.Context) {
 func (h *httpServerInstance) renewHandler(c *gin.Context) {
 	queue_name, queueNameErr := getQueueName(c)
 	if queueNameErr != nil {
-		util.Error(queueNameErr.Error())
+		h.Logger.Error("Error getting queue name", "error", queueNameErr)
 		c.JSON(http.StatusBadRequest, gin.H{"error": queueNameErr.Error()})
 		return
 	}
 	var req RenewRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		util.Error(fmt.Sprintf("Error binding JSON: %v", err))
+		h.Logger.Error("Error binding JSON", "error", err)
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request payload"})
 		return
 	}
@@ -278,7 +276,7 @@ func (h *httpServerInstance) renewHandler(c *gin.Context) {
 		if errors.Is(err, queue_error.ErrLeaseExpired) {
 			c.JSON(http.StatusConflict, gin.H{"status": "lease expired"})
 		} else {
-			util.Error(fmt.Sprintf("Error renewing message: %v", err))
+			h.Logger.Error("Error renewing message", "error", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to renew message"})
 		}
 		return

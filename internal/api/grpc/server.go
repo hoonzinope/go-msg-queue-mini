@@ -4,6 +4,7 @@ import (
 	context "context"
 	"fmt"
 	"go-msg-queue-mini/internal"
+	"log/slog"
 	"net"
 
 	grpc "google.golang.org/grpc"
@@ -12,9 +13,10 @@ import (
 type queueServiceServer struct {
 	UnimplementedQueueServiceServer
 	internal.Queue
+	Logger *slog.Logger
 }
 
-func StartServer(ctx context.Context, config *internal.Config, queue internal.Queue) error {
+func StartServer(ctx context.Context, config *internal.Config, queue internal.Queue, logger *slog.Logger) error {
 	addr := fmt.Sprintf(":%d", config.GRPC.Port)
 	lis, err := net.Listen("tcp", addr)
 	if err != nil {
@@ -41,7 +43,7 @@ func StartServer(ctx context.Context, config *internal.Config, queue internal.Qu
 			AuthInterceptor(config.GRPC.Auth.APIKey, protectedMethods),
 		),
 	)
-	queueService := NewQueueServiceServer(queue)
+	queueService := NewQueueServiceServer(queue, logger)
 	RegisterQueueServiceServer(grpcServer, queueService)
 
 	go func() {
@@ -52,9 +54,10 @@ func StartServer(ctx context.Context, config *internal.Config, queue internal.Qu
 	return grpcServer.Serve(lis)
 }
 
-func NewQueueServiceServer(queue internal.Queue) *queueServiceServer {
+func NewQueueServiceServer(queue internal.Queue, logger *slog.Logger) *queueServiceServer {
 	return &queueServiceServer{
-		Queue: queue,
+		Queue:  queue,
+		Logger: logger,
 	}
 }
 
@@ -67,9 +70,11 @@ func (qs *queueServiceServer) HealthCheck(ctx context.Context, req *EmptyRequest
 func (qs *queueServiceServer) CreateQueue(ctx context.Context, req *CreateQueueRequest) (res *CreateQueueResponse, err error) {
 	queue_name := req.GetQueueName()
 	if queue_name == "" {
+		qs.Logger.Error("Error creating queue", "error", "queue name is required")
 		return nil, fmt.Errorf("queue name is required")
 	}
 	if err := qs.Queue.CreateQueue(queue_name); err != nil {
+		qs.Logger.Error("Error creating queue", "error", err)
 		return nil, err
 	}
 	return &CreateQueueResponse{Status: "ok"}, nil
@@ -78,9 +83,11 @@ func (qs *queueServiceServer) CreateQueue(ctx context.Context, req *CreateQueueR
 func (qs *queueServiceServer) DeleteQueue(ctx context.Context, req *DeleteQueueRequest) (res *DeleteQueueResponse, err error) {
 	queue_name := req.GetQueueName()
 	if queue_name == "" {
+		qs.Logger.Error("Error deleting queue", "error", "queue name is required")
 		return nil, fmt.Errorf("queue name is required")
 	}
 	if err := qs.Queue.DeleteQueue(queue_name); err != nil {
+		qs.Logger.Error("Error deleting queue", "error", err)
 		return nil, err
 	}
 	return &DeleteQueueResponse{Status: "ok"}, nil
@@ -89,10 +96,12 @@ func (qs *queueServiceServer) DeleteQueue(ctx context.Context, req *DeleteQueueR
 func (qs *queueServiceServer) Enqueue(ctx context.Context, req *EnqueueRequest) (res *EnqueueResponse, err error) {
 	queue_name := req.GetQueueName()
 	if queue_name == "" {
+		qs.Logger.Error("Error enqueuing message", "error", "queue name is required")
 		return nil, fmt.Errorf("queue name is required")
 	}
 	message := req.GetMessage()
 	if err := qs.Queue.Enqueue(queue_name, message); err != nil {
+		qs.Logger.Error("Error enqueuing message", "error", err)
 		return nil, err
 	}
 	return &EnqueueResponse{Status: "ok", Message: message}, nil
@@ -101,10 +110,12 @@ func (qs *queueServiceServer) Enqueue(ctx context.Context, req *EnqueueRequest) 
 func (qs *queueServiceServer) EnqueueBatch(ctx context.Context, req *EnqueueBatchRequest) (res *EnqueueBatchResponse, err error) {
 	queue_name := req.GetQueueName()
 	if queue_name == "" {
+		qs.Logger.Error("Error enqueuing messages", "error", "queue name is required")
 		return nil, fmt.Errorf("queue name is required")
 	}
 	messages := req.GetMessages()
 	if len(messages) == 0 {
+		qs.Logger.Error("Error enqueuing messages", "error", "messages are required")
 		return nil, fmt.Errorf("messages are required")
 	}
 	msgs := make([]interface{}, len(messages))
@@ -113,6 +124,7 @@ func (qs *queueServiceServer) EnqueueBatch(ctx context.Context, req *EnqueueBatc
 	}
 	successCount, err := qs.Queue.EnqueueBatch(queue_name, msgs)
 	if err != nil {
+		qs.Logger.Error("Error enqueuing messages", "error", err)
 		return nil, err
 	}
 	return &EnqueueBatchResponse{Status: "ok", QueueName: queue_name, SuccessCount: int64(successCount)}, nil
@@ -121,6 +133,7 @@ func (qs *queueServiceServer) EnqueueBatch(ctx context.Context, req *EnqueueBatc
 func (qs *queueServiceServer) Dequeue(ctx context.Context, req *DequeueRequest) (res *DequeueResponse, err error) {
 	message, err := qs.Queue.Dequeue(req.QueueName, req.Group, req.ConsumerId)
 	if err != nil {
+		qs.Logger.Error("Error dequeuing message", "error", err)
 		return nil, err
 	}
 	DequeueMessage := &DequeueMessage{
@@ -136,6 +149,7 @@ func (qs *queueServiceServer) Dequeue(ctx context.Context, req *DequeueRequest) 
 
 func (qs *queueServiceServer) Ack(ctx context.Context, req *AckRequest) (res *AckResponse, err error) {
 	if err := qs.Queue.Ack(req.QueueName, req.Group, req.MessageId, req.Receipt); err != nil {
+		qs.Logger.Error("Error ACKing message", "error", err)
 		return nil, err
 	}
 	return &AckResponse{
@@ -145,6 +159,7 @@ func (qs *queueServiceServer) Ack(ctx context.Context, req *AckRequest) (res *Ac
 
 func (qs *queueServiceServer) Nack(ctx context.Context, req *NackRequest) (res *NackResponse, err error) {
 	if err := qs.Queue.Nack(req.QueueName, req.Group, req.MessageId, req.Receipt); err != nil {
+		qs.Logger.Error("Error NACKing message", "error", err)
 		return nil, err
 	}
 	return &NackResponse{
@@ -155,6 +170,7 @@ func (qs *queueServiceServer) Nack(ctx context.Context, req *NackRequest) (res *
 func (qs *queueServiceServer) Peek(ctx context.Context, req *PeekRequest) (res *PeekResponse, err error) {
 	message, err := qs.Queue.Peek(req.QueueName, req.Group)
 	if err != nil {
+		qs.Logger.Error("Error peeking message", "error", err)
 		return nil, err
 	}
 	dequeueMessage := &DequeueMessage{
@@ -170,6 +186,7 @@ func (qs *queueServiceServer) Peek(ctx context.Context, req *PeekRequest) (res *
 
 func (qs *queueServiceServer) Renew(ctx context.Context, req *RenewRequest) (res *RenewResponse, err error) {
 	if err := qs.Queue.Renew(req.QueueName, req.Group, req.MessageId, req.Receipt, int(req.ExtendSec)); err != nil {
+		qs.Logger.Error("Error renewing message", "error", err)
 		return nil, err
 	}
 	return &RenewResponse{
@@ -181,6 +198,7 @@ func (qs *queueServiceServer) Status(ctx context.Context, req *StatusRequest) (r
 	// Check the status of the queue
 	status, err := qs.Queue.Status(req.QueueName)
 	if err != nil {
+		qs.Logger.Error("Error getting queue status", "error", err)
 		return nil, err
 	}
 	queueStatus := &QueueStatus{

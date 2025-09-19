@@ -3,6 +3,8 @@ package grpc
 import (
 	"context"
 	"errors"
+	"log/slog"
+	"os"
 	"reflect"
 	"testing"
 
@@ -54,7 +56,8 @@ func (m *mockQueue) Renew(string, string, int64, string, int) error { return nil
 
 func TestQueueServiceEnqueueBatchSuccess(t *testing.T) {
 	mq := &mockQueue{enqueueBatchResult: 2}
-	server := NewQueueServiceServer(mq)
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	server := NewQueueServiceServer(mq, logger)
 
 	req := &EnqueueBatchRequest{
 		QueueName: "test-queue",
@@ -92,7 +95,8 @@ func TestQueueServiceEnqueueBatchSuccess(t *testing.T) {
 
 func TestQueueServiceEnqueueBatchMissingQueueName(t *testing.T) {
 	mq := &mockQueue{}
-	server := NewQueueServiceServer(mq)
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	server := NewQueueServiceServer(mq, logger)
 
 	req := &EnqueueBatchRequest{QueueName: "", Messages: []string{"msg"}}
 
@@ -110,7 +114,8 @@ func TestQueueServiceEnqueueBatchMissingQueueName(t *testing.T) {
 
 func TestQueueServiceEnqueueBatchEmptyMessages(t *testing.T) {
 	mq := &mockQueue{}
-	server := NewQueueServiceServer(mq)
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	server := NewQueueServiceServer(mq, logger)
 
 	req := &EnqueueBatchRequest{QueueName: "test-queue", Messages: []string{}}
 
@@ -128,7 +133,8 @@ func TestQueueServiceEnqueueBatchEmptyMessages(t *testing.T) {
 
 func TestQueueServiceEnqueueBatchQueueError(t *testing.T) {
 	mq := &mockQueue{enqueueBatchError: errors.New("boom")}
-	server := NewQueueServiceServer(mq)
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	server := NewQueueServiceServer(mq, logger)
 
 	req := &EnqueueBatchRequest{QueueName: "test-queue", Messages: []string{"msg"}}
 
