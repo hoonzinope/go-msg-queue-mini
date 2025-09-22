@@ -12,6 +12,7 @@ A compact yet robust Go-based message queue. It supports Producer/Consumer runti
 - **Lease/Renew**: Message lease with `/renew` to extend
 - **Peek**: Inspect next message without claiming via `/peek`
 - **Status**: `/status` returns totals for queue/acked/inflight/dlq
+- **Batch enqueue**: Load multiple messages at once via `/enqueue/batch` and gRPC `EnqueueBatch`
 - **Modes**: `debug` (local producers/consumers + monitor) or HTTP/gRPC server
 
 ## Quick Start
@@ -22,6 +23,7 @@ A compact yet robust Go-based message queue. It supports Producer/Consumer runti
 - Health: `curl -s localhost:8080/health`
 - Create queue: `curl -X POST localhost:8080/api/v1/default/create -H 'X-API-Key: $API_KEY'`
 - Enqueue: `curl -X POST localhost:8080/api/v1/default/enqueue -H 'Content-Type: application/json' -H 'X-API-Key: $API_KEY' -d '{"message": {"text":"hello"}}'`
+- Batch enqueue: `curl -X POST localhost:8080/api/v1/default/enqueue/batch -H 'Content-Type: application/json' -H 'X-API-Key: $API_KEY' -d '{"messages": [{"text":"hello"},{"text":"world"}]}'`
 - Dequeue: `curl -X POST localhost:8080/api/v1/default/dequeue -H 'Content-Type: application/json' -H 'X-API-Key: $API_KEY' -d '{"group":"g1","consumer_id":"c-1"}'`
 
 ## Project Structure
@@ -43,7 +45,7 @@ A compact yet robust Go-based message queue. It supports Producer/Consumer runti
 │   ├── config_test.go           # Config loader test
 │   ├── api/http/
 │   │   ├── server.go            # Gin HTTP server bootstrap
-│   │   ├── handler.go           # API handlers (create/delete/enqueue/dequeue/ack/nack/peek/renew/status/health)
+│   │   ├── handler.go           # API handlers (create/delete/enqueue(+batch)/dequeue/ack/nack/peek/renew/status/health)
 │   │   └── dto.go               # Request/response DTOs
 │   ├── api/grpc/                # gRPC server + generated pb files
 │   │   ├── server.go
@@ -61,7 +63,7 @@ A compact yet robust Go-based message queue. It supports Producer/Consumer runti
 └── util/
     ├── randUtil.go              # Random messages/numbers, jitter
     ├── uuid.go                  # Global ID generator
-    └── logger.go                # Simple logger
+    └── logger.go                # slog-backed logger initialization
 ```
 
 ## Build/Run/Dev
@@ -119,6 +121,12 @@ grpc:
 - `grpc.enabled: true`
   - Runs the gRPC server on `:50051` (or configured port).
 
+## Logging
+
+- All components use Go's `log/slog` for structured logging (`util/logger.go`).
+- `debug: true` switches to the text handler; other modes emit JSON to stdout.
+- Queue core and HTTP/gRPC layers log shared fields (e.g., `error`, `queue`, `status`) for easier correlation.
+
 ## HTTP API
 
 - Health: `GET /health`
@@ -134,6 +142,9 @@ grpc:
 - Enqueue: `POST /api/v1/:queue_name/enqueue` (header: `X-API-Key: <key>` required)
   - Request: `{ "message": <any JSON> }`
   - Example: `curl -X POST localhost:8080/api/v1/default/enqueue -H 'Content-Type: application/json' -H 'X-API-Key: $API_KEY' -d '{"message": {"text":"hello"}}'`
+- Enqueue Batch: `POST /api/v1/:queue_name/enqueue/batch` (header: `X-API-Key: <key>` required)
+  - Request: `{ "messages": [<any JSON>, ...] }`
+  - Response: `202 Accepted`, `{ "status": "enqueued", "success_count": <int> }`
 
 - Dequeue: `POST /api/v1/:queue_name/dequeue` (requires `X-API-Key`)
   - Request: `{ "group": "g1", "consumer_id": "c-1" }`
@@ -161,28 +172,28 @@ grpc:
 
 Common: server returns `X-Request-ID` (auto-generated if missing). Bursts may receive 429 Too Many Requests due to rate limiting.
 
--## gRPC API
+## gRPC API
 - Enable with `grpc.enabled: true`, default port `50051`.
 - Health: `queue.v1.QueueService/HealthCheck` → `{ status: "ok" }`.
-- Core RPCs: `CreateQueue`, `DeleteQueue`, `Enqueue`, `Dequeue`, `Ack`, `Nack`, `Peek`, `Renew`, `Status` (proto: `proto/queue.proto`).
-- Message type: gRPC `message` is a string; HTTP supports arbitrary JSON payloads.
+- Core RPCs: `CreateQueue`, `DeleteQueue`, `Enqueue`, `EnqueueBatch`, `Dequeue`, `Ack`, `Nack`, `Peek`, `Renew`, `Status` (see `proto/queue.proto`).
+- Message type: gRPC `message` payloads are strings; HTTP accepts arbitrary JSON payloads.
 - Example (grpcurl):
   - List services: `grpcurl -plaintext localhost:50051 list`
-  - Enqueue: `grpcurl -plaintext -d '{"queue_name":"default","message":"hello"}' localhost:50051 queue.v1.QueueService/Enqueue`
+  - Batch enqueue: `grpcurl -plaintext -d '{"queue_name":"default","messages":["hello","world"]}' localhost:50051 queue.v1.QueueService/EnqueueBatch`
 
 ## gRPC Interceptors
 - Logging: `LoggerInterceptor` logs method and latency per call.
 - Error log: `ErrorInterceptor` logs handler errors.
 - Recovery: `RecoveryInterceptor` converts panics to `codes.Internal`.
 - Auth: `AuthInterceptor(apiKey, protectedMethods)` enforces metadata `x-api-key` for protected methods.
-  - Protected: `/CreateQueue`, `/DeleteQueue`, `/Enqueue`, `/Dequeue`, `/Ack`, `/Nack`, `/Renew`
+  - Protected: `/CreateQueue`, `/DeleteQueue`, `/Enqueue`, `/EnqueueBatch`, `/Dequeue`, `/Ack`, `/Nack`, `/Renew`
   - Public: `/Peek`, `/Status`, `/HealthCheck`
   - Note: gRPC metadata key is lowercase `x-api-key` (unlike HTTP header casing).
 - Chain order: Recovery → Logger → Error → Auth (via `grpc.ChainUnaryInterceptor`).
 
 Examples (grpcurl)
 - Public RPC: `grpcurl -plaintext localhost:50051 queue.v1.QueueService/HealthCheck`
-- Protected RPC: `grpcurl -plaintext -H 'x-api-key: $API_KEY' -d '{"queue_name":"default","message":"hello"}' localhost:50051 queue.v1.QueueService/Enqueue`
+- Protected RPC: `grpcurl -plaintext -H 'x-api-key: $API_KEY' -d '{"queue_name":"default","messages":["hello","world"]}' localhost:50051 queue.v1.QueueService/EnqueueBatch`
 
 ## Tests
 
@@ -191,12 +202,12 @@ Examples (grpcurl)
 - Optionally use `-cover` for coverage
 
 ## Changes Summary
-- Added gRPC Queue Service: `internal/api/grpc/*`, `proto/queue.proto`, and `grpc.enabled/port` config.
-- Added HTTP middlewares: logging, error handling, Request-ID, API key auth, and IP-based rate limiting (with periodic cleanup).
-- Config improvements: `.env` loading and env expansion for `config.yml`; new rate/auth/gRPC sections.
-- Standardized JSON fields, improved error handling, and graceful shutdown on exit.
-- HTTP refactor into server/handler/dto files.
-- Added gRPC interceptors: logging/error/recovery/API-key auth via metadata (`x-api-key`), with protected vs public methods. Added `grpc.auth.api_key` to `config.yml`.
+- Added batch enqueue support: HTTP `/enqueue/batch`, gRPC `EnqueueBatch`, and batched writes in the file-backed queue.
+- Switched to structured logging via Go `log/slog` (text in debug mode, JSON otherwise) with shared diagnostic fields.
+- Introduced the gRPC Queue Service and interceptors (logging/error/recovery/API key) and expanded `proto/queue.proto`.
+- Refactored the HTTP server into server/handler/dto packages with logging, Request-ID, rate limiting, and API key middleware.
+- Enhanced configuration: `.env` loading, environment expansion in `config.yml`, and extended HTTP/GRPC/rate limit options.
+- Standardized JSON fields, strengthened error handling, ensured graceful shutdown, and enriched Prometheus metrics.
 
 ## Metrics (Prometheus)
 - Counters: `mq_enqueue_total`, `mq_dequeue_total`, `mq_ack_total`, `mq_nack_total` (label: `queue`)
