@@ -109,8 +109,8 @@ func (q *fileDBQueue) Enqueue(queue_name string, item interface{}) error {
 	return nil
 }
 
-func (q *fileDBQueue) EnqueueBatch(queue_name string, items []interface{}) (int, error) {
-	successCount := 0
+func (q *fileDBQueue) EnqueueBatch(queue_name string, items []interface{}) (int64, error) {
+	var successCount int64 = 0
 	msgs := make([][]byte, 0, len(items))
 	for _, item := range items {
 		msg, err := json.Marshal(item)

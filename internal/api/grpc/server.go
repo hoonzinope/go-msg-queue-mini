@@ -142,19 +142,21 @@ func (qs *queueServiceServer) EnqueueBatch(ctx context.Context, req *EnqueueBatc
 				qs.Logger.Error("Error enqueuing messages", "error", err)
 				return &EnqueueBatchResponse{
 					Status:       "enqueued",
-					SuccessCount: totalSuccess,
+					QueueName:    queue_name,
+					SuccessCount: totalSuccess + int64(successCount),
 					FailureCount: int64(len(messages)) - totalSuccess,
 					// No failed messages in stopOnFailure mode
 				}, nil
 			}
-			totalSuccess += int64(successCount)
 			// If some messages in the chunk failed, stop processing further
-			if successCount < len(chunk) {
+			if successCount < int64(len(chunk)) {
 				break
 			}
+			totalSuccess += int64(successCount)
 		}
 		return &EnqueueBatchResponse{
 			Status:       "enqueued",
+			QueueName:    queue_name,
 			SuccessCount: totalSuccess,
 			FailureCount: int64(len(messages)) - totalSuccess,
 			// No failed messages in stopOnFailure mode
@@ -166,12 +168,22 @@ func (qs *queueServiceServer) EnqueueBatch(ctx context.Context, req *EnqueueBatc
 			if err != nil {
 				qs.Logger.Error("Error enqueuing messages", "error", err)
 				// Mark all messages in this chunk as failed
-				for i := 0; i < len(chunk); i++ {
-					failedMessages = append(failedMessages, &FailedMessage{
-						Index:   totalSuccess + int64(i),
-						Message: string(chunk[i].(json.RawMessage)),
-						Error:   err.Error(),
-					})
+				startIndex := successCount + 1
+				endIndex := int64(len(chunk))
+				for i := startIndex; i < endIndex; i++ {
+					if i == startIndex {
+						failedMessages = append(failedMessages, &FailedMessage{
+							Index:   totalSuccess + i,
+							Message: string(chunk[i].(json.RawMessage)),
+							Error:   err.Error(),
+						})
+					} else {
+						failedMessages = append(failedMessages, &FailedMessage{
+							Index:   totalSuccess + int64(i),
+							Message: string(chunk[i].(json.RawMessage)),
+							Error:   fmt.Errorf("skipped due to previous error").Error(),
+						})
+					}
 				}
 			} else {
 				totalSuccess += int64(successCount)
@@ -179,6 +191,7 @@ func (qs *queueServiceServer) EnqueueBatch(ctx context.Context, req *EnqueueBatc
 		}
 		return &EnqueueBatchResponse{
 			Status:         "enqueued",
+			QueueName:      queue_name,
 			SuccessCount:   totalSuccess,
 			FailureCount:   int64(len(messages)) - totalSuccess,
 			FailedMessages: failedMessages,

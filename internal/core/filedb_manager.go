@@ -422,24 +422,24 @@ func (m *FileDBManager) WriteMessageWithMeta(queue_name string, msg []byte, glob
 	})
 }
 
-func (m *FileDBManager) WriteMessagesBatch(queue_name string, msgs [][]byte) (int, error) {
+func (m *FileDBManager) WriteMessagesBatch(queue_name string, msgs [][]byte) (int64, error) {
 	pid := 0
 	return m.WriteMessagesBatchWithMeta(queue_name, msgs, pid)
 }
 
-func (m *FileDBManager) WriteMessagesBatchWithMeta(queue_name string, msgs [][]byte, partitionID int) (int, error) {
+func (m *FileDBManager) WriteMessagesBatchWithMeta(queue_name string, msgs [][]byte, partitionID int) (int64, error) {
 	queueInfoID, err := m.getQueueInfoID(queue_name)
 	if err != nil {
 		return 0, err
 	}
-	successCount := 0
-	err = m.inTx(func(tx *sql.Tx) error {
+	var successCount int64 = 0
+	successCount, err = m.inTxWithCount(func(tx *sql.Tx) (int64, error) {
 		stmt, err := tx.Prepare(`
 			INSERT INTO queue 
 			(queue_info_id, msg, global_id, partition_id) 
 			VALUES (?, ?, ?, ?)`)
 		if err != nil {
-			return err
+			return 0, err
 		}
 		defer stmt.Close()
 
@@ -447,11 +447,11 @@ func (m *FileDBManager) WriteMessagesBatchWithMeta(queue_name string, msgs [][]b
 			globalID := util.GenerateGlobalID()
 			_, insertErr := stmt.Exec(queueInfoID, msg, globalID, partitionID)
 			if insertErr != nil {
-				return insertErr
+				return int64(successCount), insertErr
 			}
 			successCount++
 		}
-		return nil
+		return int64(successCount), nil
 	})
 	if err != nil {
 		return 0, err

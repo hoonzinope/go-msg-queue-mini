@@ -18,13 +18,13 @@ type EnqueueBatchRequest struct {
 
 type EnqueueBatchResponse struct {
 	Status         string          `json:"status"`
-	SuccessCount   int             `json:"success_count"`
-	FailureCount   int             `json:"failure_count"`
+	SuccessCount   int64           `json:"success_count"`
+	FailureCount   int64           `json:"failure_count"`
 	FailedMessages []FailedMessage `json:"failed_messages"`
 }
 
 type FailedMessage struct {
-	Index   int    `json:"index"`
+	Index   int64  `json:"index"`
 	Message string `json:"message"`
 	Error   string `json:"error"`
 }

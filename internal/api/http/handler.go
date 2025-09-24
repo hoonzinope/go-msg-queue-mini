@@ -3,6 +3,7 @@ package http
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"go-msg-queue-mini/internal/queue_error"
 	"go-msg-queue-mini/util"
 	"net/http"
@@ -109,7 +110,7 @@ func (h *httpServerInstance) enqueueBatchHandler(c *gin.Context) {
 	}
 
 	chunkedMsgs := util.ChunkSlice(msgs, 100) // Chunk size of 100
-	totalSuccess := 0
+	var totalSuccess int64 = 0
 	switch mode {
 	case "stopOnFailure":
 		for _, chunk := range chunkedMsgs {
@@ -119,17 +120,21 @@ func (h *httpServerInstance) enqueueBatchHandler(c *gin.Context) {
 				c.JSON(http.StatusAccepted, EnqueueBatchResponse{
 					Status:       "enqueued",
 					SuccessCount: totalSuccess,
-					FailureCount: len(req.Messages) - totalSuccess,
+					FailureCount: int64(len(req.Messages)) - totalSuccess,
 					// No failed messages in stopOnFailure mode
 				})
 				return
+			}
+			if successCount < int64(len(chunk)) {
+				// If some messages in the chunk failed, stop processing further
+				break
 			}
 			totalSuccess += successCount
 		}
 		c.JSON(http.StatusAccepted, EnqueueBatchResponse{
 			Status:       "enqueued",
 			SuccessCount: totalSuccess,
-			FailureCount: len(req.Messages) - totalSuccess,
+			FailureCount: int64(len(req.Messages)) - totalSuccess,
 			// No failed messages in stopOnFailure mode
 		})
 		return
@@ -141,12 +146,22 @@ func (h *httpServerInstance) enqueueBatchHandler(c *gin.Context) {
 			if err != nil {
 				h.Logger.Error("Error enqueuing messages in chunk", "error", err)
 				// Mark all messages in this chunk as failed
-				for i := 0; i < len(chunk); i++ {
-					failedMessages = append(failedMessages, FailedMessage{
-						Index:   totalSuccess + i,
-						Message: string(chunk[i].(json.RawMessage)),
-						Error:   err.Error(),
-					})
+				startIndex := successCount + 1
+				endIndex := int64(len(chunk))
+				for i := startIndex; i < endIndex; i++ {
+					if i == startIndex {
+						failedMessages = append(failedMessages, FailedMessage{
+							Index:   totalSuccess + i,
+							Message: string(chunk[i].(json.RawMessage)),
+							Error:   err.Error(),
+						})
+					} else {
+						failedMessages = append(failedMessages, FailedMessage{
+							Index:   totalSuccess + i,
+							Message: string(chunk[i].(json.RawMessage)),
+							Error:   fmt.Errorf("skipped due to previous error").Error(),
+						})
+					}
 				}
 			} else {
 				totalSuccess += successCount
@@ -155,7 +170,7 @@ func (h *httpServerInstance) enqueueBatchHandler(c *gin.Context) {
 		c.JSON(http.StatusAccepted, EnqueueBatchResponse{
 			Status:         "enqueued",
 			SuccessCount:   totalSuccess,
-			FailureCount:   len(req.Messages) - totalSuccess,
+			FailureCount:   int64(len(req.Messages)) - totalSuccess,
 			FailedMessages: failedMessages,
 		})
 		return

@@ -44,8 +44,8 @@ func TestFileDBQueueEnqueueBatchSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("enqueue batch returned error: %v", err)
 	}
-	if successCount != len(batch) {
-		t.Fatalf("enqueue batch success count = %d, want %d", successCount, len(batch))
+	if successCount != int64(len(batch)) {
+		t.Fatalf("enqueue batch success count = %d, want %d", successCount, int64(len(batch)))
 	}
 
 	expected := []interface{}{"first", map[string]interface{}{"foo": "bar"}}

@@ -18,7 +18,7 @@ type enqueueBatchCall struct {
 }
 
 type mockQueue struct {
-	enqueueBatchResult int
+	enqueueBatchResult int64
 	enqueueBatchError  error
 	enqueueBatchCalls  []enqueueBatchCall
 }
@@ -29,7 +29,7 @@ func (m *mockQueue) DeleteQueue(string) error { return nil }
 
 func (m *mockQueue) Enqueue(string, interface{}) error { return nil }
 
-func (m *mockQueue) EnqueueBatch(queueName string, items []interface{}) (int, error) {
+func (m *mockQueue) EnqueueBatch(queueName string, items []interface{}) (int64, error) {
 	m.enqueueBatchCalls = append(m.enqueueBatchCalls, enqueueBatchCall{queueName: queueName, items: items})
 	return m.enqueueBatchResult, m.enqueueBatchError
 }
@@ -61,6 +61,7 @@ func TestQueueServiceEnqueueBatchSuccess(t *testing.T) {
 
 	req := &EnqueueBatchRequest{
 		QueueName: "test-queue",
+		Mode:      "stopOnFailure",
 		Messages:  []string{"first", "second"},
 	}
 
@@ -68,8 +69,8 @@ func TestQueueServiceEnqueueBatchSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("enqueue batch returned error: %v", err)
 	}
-	if resp.GetStatus() != "ok" {
-		t.Fatalf("response status = %s, want ok", resp.GetStatus())
+	if resp.GetStatus() != "enqueued" {
+		t.Fatalf("response status = %s, want enqueued", resp.GetStatus())
 	}
 
 	if resp.GetQueueName() != "test-queue" {
@@ -98,7 +99,7 @@ func TestQueueServiceEnqueueBatchMissingQueueName(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	server := NewQueueServiceServer(mq, logger)
 
-	req := &EnqueueBatchRequest{QueueName: "", Messages: []string{"msg"}}
+	req := &EnqueueBatchRequest{QueueName: "", Mode: "stopOnFailure", Messages: []string{"msg"}}
 
 	resp, err := server.EnqueueBatch(context.Background(), req)
 	if err == nil {
@@ -117,7 +118,7 @@ func TestQueueServiceEnqueueBatchEmptyMessages(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	server := NewQueueServiceServer(mq, logger)
 
-	req := &EnqueueBatchRequest{QueueName: "test-queue", Messages: []string{}}
+	req := &EnqueueBatchRequest{QueueName: "test-queue", Mode: "stopOnFailure", Messages: []string{}}
 
 	resp, err := server.EnqueueBatch(context.Background(), req)
 	if err == nil {
@@ -136,7 +137,7 @@ func TestQueueServiceEnqueueBatchQueueError(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	server := NewQueueServiceServer(mq, logger)
 
-	req := &EnqueueBatchRequest{QueueName: "test-queue", Messages: []string{"msg"}}
+	req := &EnqueueBatchRequest{QueueName: "test-queue", Mode: "stopOnFailure", Messages: []string{"msg"}}
 
 	resp, err := server.EnqueueBatch(context.Background(), req)
 	if err == nil {
