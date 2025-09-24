@@ -184,8 +184,9 @@ func (qs *queueServiceServer) EnqueueBatch(ctx context.Context, req *EnqueueBatc
 						})
 					}
 				}
+				totalSuccess += successCount
 			} else {
-				totalSuccess += int64(successCount)
+				totalSuccess += successCount
 			}
 		}
 		return &EnqueueBatchResponse{

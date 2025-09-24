@@ -163,6 +163,7 @@ func (h *httpServerInstance) enqueueBatchHandler(c *gin.Context) {
 						})
 					}
 				}
+				totalSuccess += successCount
 			} else {
 				totalSuccess += successCount
 			}
