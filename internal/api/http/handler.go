@@ -119,17 +119,17 @@ func (h *httpServerInstance) enqueueBatchHandler(c *gin.Context) {
 				h.Logger.Error("Error enqueuing messages", "error", err)
 				c.JSON(http.StatusAccepted, EnqueueBatchResponse{
 					Status:       "enqueued",
-					SuccessCount: totalSuccess,
-					FailureCount: int64(len(req.Messages)) - totalSuccess,
+					SuccessCount: totalSuccess + successCount,
+					FailureCount: int64(len(req.Messages)) - (totalSuccess + successCount),
 					// No failed messages in stopOnFailure mode
 				})
 				return
 			}
+			totalSuccess += successCount
 			if successCount < int64(len(chunk)) {
 				// If some messages in the chunk failed, stop processing further
 				break
 			}
-			totalSuccess += successCount
 		}
 		c.JSON(http.StatusAccepted, EnqueueBatchResponse{
 			Status:       "enqueued",
@@ -146,7 +146,7 @@ func (h *httpServerInstance) enqueueBatchHandler(c *gin.Context) {
 			if err != nil {
 				h.Logger.Error("Error enqueuing messages in chunk", "error", err)
 				// Mark all messages in this chunk as failed
-				startIndex := successCount + 1
+				startIndex := successCount
 				endIndex := int64(len(chunk))
 				for i := startIndex; i < endIndex; i++ {
 					if i == startIndex {

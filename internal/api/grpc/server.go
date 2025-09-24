@@ -2,7 +2,6 @@ package grpc
 
 import (
 	context "context"
-	"encoding/json"
 	"fmt"
 	"go-msg-queue-mini/internal"
 	"go-msg-queue-mini/util"
@@ -143,16 +142,16 @@ func (qs *queueServiceServer) EnqueueBatch(ctx context.Context, req *EnqueueBatc
 				return &EnqueueBatchResponse{
 					Status:       "enqueued",
 					QueueName:    queue_name,
-					SuccessCount: totalSuccess + int64(successCount),
-					FailureCount: int64(len(messages)) - totalSuccess,
+					SuccessCount: totalSuccess + successCount,
+					FailureCount: int64(len(messages)) - (totalSuccess + successCount),
 					// No failed messages in stopOnFailure mode
 				}, nil
 			}
 			// If some messages in the chunk failed, stop processing further
+			totalSuccess += successCount
 			if successCount < int64(len(chunk)) {
 				break
 			}
-			totalSuccess += int64(successCount)
 		}
 		return &EnqueueBatchResponse{
 			Status:       "enqueued",
@@ -168,19 +167,19 @@ func (qs *queueServiceServer) EnqueueBatch(ctx context.Context, req *EnqueueBatc
 			if err != nil {
 				qs.Logger.Error("Error enqueuing messages", "error", err)
 				// Mark all messages in this chunk as failed
-				startIndex := successCount + 1
+				startIndex := successCount
 				endIndex := int64(len(chunk))
 				for i := startIndex; i < endIndex; i++ {
 					if i == startIndex {
 						failedMessages = append(failedMessages, &FailedMessage{
 							Index:   totalSuccess + i,
-							Message: string(chunk[i].(json.RawMessage)),
+							Message: string(chunk[i].(string)),
 							Error:   err.Error(),
 						})
 					} else {
 						failedMessages = append(failedMessages, &FailedMessage{
 							Index:   totalSuccess + int64(i),
-							Message: string(chunk[i].(json.RawMessage)),
+							Message: string(chunk[i].(string)),
 							Error:   fmt.Errorf("skipped due to previous error").Error(),
 						})
 					}
