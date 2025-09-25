@@ -1,6 +1,7 @@
 package http
 
 import (
+	"encoding/json"
 	"errors"
 	"go-msg-queue-mini/internal/queue_error"
 	"net/http"
@@ -123,7 +124,7 @@ func (h *httpServerInstance) enqueueBatchHandler(c *gin.Context) {
 		for i, fm := range batchResult.FailedMessages {
 			resp.FailedMessages[i] = FailedMessage{
 				Index:   fm.Index,
-				Message: fm.Message.(string),
+				Message: string(fm.Message.(json.RawMessage)),
 				Error:   fm.Reason,
 			}
 		}

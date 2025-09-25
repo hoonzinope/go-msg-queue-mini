@@ -432,14 +432,14 @@ func (m *FileDBManager) WriteMessagesBatchWithMeta(queue_name string, msgs [][]b
 	if err != nil {
 		return 0, err
 	}
-	var successCount int64 = 0
-	successCount, err = m.inTxWithCount(func(tx *sql.Tx) (int64, error) {
+	successCount, err := m.inTxWithCount(func(tx *sql.Tx) (int64, error) {
+		var txCnt int64 = 0
 		stmt, err := tx.Prepare(`
 			INSERT INTO queue 
 			(queue_info_id, msg, global_id, partition_id) 
 			VALUES (?, ?, ?, ?)`)
 		if err != nil {
-			return 0, err
+			return txCnt, err
 		}
 		defer stmt.Close()
 
@@ -447,11 +447,11 @@ func (m *FileDBManager) WriteMessagesBatchWithMeta(queue_name string, msgs [][]b
 			globalID := util.GenerateGlobalID()
 			_, insertErr := stmt.Exec(queueInfoID, msg, globalID, partitionID)
 			if insertErr != nil {
-				return int64(successCount), insertErr
+				return txCnt, insertErr
 			}
-			successCount++
+			txCnt++
 		}
-		return int64(successCount), nil
+		return txCnt, nil
 	})
 	if err != nil {
 		return 0, err
