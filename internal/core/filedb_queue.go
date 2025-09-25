@@ -7,6 +7,7 @@ import (
 	"go-msg-queue-mini/internal"
 	"go-msg-queue-mini/internal/metrics"
 	"go-msg-queue-mini/internal/queue_error"
+	"go-msg-queue-mini/util"
 	"log/slog"
 	"os"
 	"sync"
@@ -109,7 +110,7 @@ func (q *fileDBQueue) Enqueue(queue_name string, item interface{}) error {
 	return nil
 }
 
-func (q *fileDBQueue) EnqueueBatch(queue_name string, items []interface{}) (int64, error) {
+func (q *fileDBQueue) _enqueueBatch(queue_name string, items []interface{}) (int64, error) {
 	var successCount int64 = 0
 	msgs := make([][]byte, 0, len(items))
 	for _, item := range items {
@@ -128,6 +129,69 @@ func (q *fileDBQueue) EnqueueBatch(queue_name string, items []interface{}) (int6
 	}
 	q.MQMetrics.EnqueueCounter.WithLabelValues(queue_name).Add(float64(successCount))
 	return successCount, nil
+}
+
+func (q *fileDBQueue) EnqueueBatch(queue_name, mode string, items []interface{}) (internal.BatchResult, error) {
+	chunkedMsgs := util.ChunkSlice(items, 100) // Chunk size of 100
+	var totalSuccess int64 = 0
+	var failedMessages []internal.FailedMessage
+	switch mode {
+	case "stopOnFailure":
+		for _, chunk := range chunkedMsgs {
+			successCount, err := q._enqueueBatch(queue_name, chunk)
+			if err != nil {
+				q.logger.Error("Error enqueuing messages", "error", err)
+				return internal.BatchResult{
+					SuccessCount:   totalSuccess + successCount,
+					FailedCount:    int64(len(items)) - (totalSuccess + successCount),
+					FailedMessages: failedMessages,
+				}, nil
+			}
+			// If some messages in the chunk failed, stop processing further
+			totalSuccess += successCount
+			if successCount < int64(len(chunk)) {
+				break
+			}
+		}
+		return internal.BatchResult{
+			SuccessCount:   totalSuccess,
+			FailedCount:    int64(len(items)) - totalSuccess,
+			FailedMessages: failedMessages,
+		}, nil
+	case "partialSuccess":
+		for _, chunk := range chunkedMsgs {
+			successCount, err := q._enqueueBatch(queue_name, chunk)
+			if err != nil {
+				q.logger.Error("Error enqueuing messages", "error", err)
+				// Mark all messages in this chunk as failed
+				startIndex := successCount
+				endIndex := int64(len(chunk))
+				for i := startIndex; i < endIndex; i++ {
+					if i == startIndex {
+						failedMessages = append(failedMessages, internal.FailedMessage{
+							Index:   totalSuccess + i,
+							Message: chunk[i],
+							Reason:  err.Error(),
+						})
+					} else {
+						failedMessages = append(failedMessages, internal.FailedMessage{
+							Index:   totalSuccess + i,
+							Message: chunk[i],
+							Reason:  "Enqueue failed due to previous error",
+						})
+					}
+				}
+			}
+			totalSuccess += successCount
+		}
+		return internal.BatchResult{
+			SuccessCount:   totalSuccess,
+			FailedCount:    int64(len(items)) - totalSuccess,
+			FailedMessages: failedMessages,
+		}, nil
+	default:
+		return internal.BatchResult{}, fmt.Errorf("invalid mode: %s", mode)
+	}
 }
 
 func (q *fileDBQueue) Dequeue(queue_name, consumer_group string, consumer_id string) (internal.QueueMessage, error) {

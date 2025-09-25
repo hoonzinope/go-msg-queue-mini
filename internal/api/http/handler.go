@@ -1,11 +1,8 @@
 package http
 
 import (
-	"encoding/json"
 	"errors"
-	"fmt"
 	"go-msg-queue-mini/internal/queue_error"
-	"go-msg-queue-mini/util"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -109,77 +106,30 @@ func (h *httpServerInstance) enqueueBatchHandler(c *gin.Context) {
 		msgs[i] = msg
 	}
 
-	chunkedMsgs := util.ChunkSlice(msgs, 100) // Chunk size of 100
-	var totalSuccess int64 = 0
-	switch mode {
-	case "stopOnFailure":
-		for _, chunk := range chunkedMsgs {
-			successCount, err := h.Queue.EnqueueBatch(queue_name, chunk)
-			if err != nil {
-				h.Logger.Error("Error enqueuing messages", "error", err)
-				c.JSON(http.StatusAccepted, EnqueueBatchResponse{
-					Status:       "enqueued",
-					SuccessCount: totalSuccess + successCount,
-					FailureCount: int64(len(req.Messages)) - (totalSuccess + successCount),
-					// No failed messages in stopOnFailure mode
-				})
-				return
-			}
-			totalSuccess += successCount
-			if successCount < int64(len(chunk)) {
-				// If some messages in the chunk failed, stop processing further
-				break
-			}
-		}
-		c.JSON(http.StatusAccepted, EnqueueBatchResponse{
-			Status:       "enqueued",
-			SuccessCount: totalSuccess,
-			FailureCount: int64(len(req.Messages)) - totalSuccess,
-			// No failed messages in stopOnFailure mode
-		})
-		return
-	case "partialSuccess":
-		// partialSuccess mode
-		failedMessages := []FailedMessage{}
-		for _, chunk := range chunkedMsgs {
-			successCount, err := h.Queue.EnqueueBatch(queue_name, chunk)
-			if err != nil {
-				h.Logger.Error("Error enqueuing messages in chunk", "error", err)
-				// Mark all messages in this chunk as failed
-				startIndex := successCount
-				endIndex := int64(len(chunk))
-				for i := startIndex; i < endIndex; i++ {
-					if i == startIndex {
-						failedMessages = append(failedMessages, FailedMessage{
-							Index:   totalSuccess + i,
-							Message: string(chunk[i].(json.RawMessage)),
-							Error:   err.Error(),
-						})
-					} else {
-						failedMessages = append(failedMessages, FailedMessage{
-							Index:   totalSuccess + i,
-							Message: string(chunk[i].(json.RawMessage)),
-							Error:   fmt.Errorf("skipped due to previous error").Error(),
-						})
-					}
-				}
-				totalSuccess += successCount
-			} else {
-				totalSuccess += successCount
-			}
-		}
-		c.JSON(http.StatusAccepted, EnqueueBatchResponse{
-			Status:         "enqueued",
-			SuccessCount:   totalSuccess,
-			FailureCount:   int64(len(req.Messages)) - totalSuccess,
-			FailedMessages: failedMessages,
-		})
-		return
-	default:
-		h.Logger.Error("Invalid mode", "mode", mode)
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid mode"})
+	batchResult, err := h.Queue.EnqueueBatch(queue_name, mode, msgs)
+	if err != nil {
+		h.Logger.Error("Error enqueuing messages", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to enqueue messages"})
 		return
 	}
+
+	resp := EnqueueBatchResponse{
+		Status:       "enqueued",
+		SuccessCount: batchResult.SuccessCount,
+		FailureCount: batchResult.FailedCount,
+	}
+	if len(batchResult.FailedMessages) > 0 {
+		resp.FailedMessages = make([]FailedMessage, len(batchResult.FailedMessages))
+		for i, fm := range batchResult.FailedMessages {
+			resp.FailedMessages[i] = FailedMessage{
+				Index:   fm.Index,
+				Message: fm.Message.(string),
+				Error:   fm.Reason,
+			}
+		}
+	}
+
+	c.JSON(http.StatusAccepted, resp)
 }
 
 func (h *httpServerInstance) dequeueHandler(c *gin.Context) {

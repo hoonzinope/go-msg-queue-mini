@@ -4,7 +4,6 @@ import (
 	context "context"
 	"fmt"
 	"go-msg-queue-mini/internal"
-	"go-msg-queue-mini/util"
 	"log/slog"
 	"net"
 
@@ -131,75 +130,28 @@ func (qs *queueServiceServer) EnqueueBatch(ctx context.Context, req *EnqueueBatc
 		msgs[i] = msg
 	}
 
-	chunkedMsgs := util.ChunkSlice(msgs, 100) // Chunk size of 100
-	var totalSuccess int64 = 0
-	switch mode {
-	case "stopOnFailure":
-		for _, chunk := range chunkedMsgs {
-			successCount, err := qs.Queue.EnqueueBatch(queue_name, chunk)
-			if err != nil {
-				qs.Logger.Error("Error enqueuing messages", "error", err)
-				return &EnqueueBatchResponse{
-					Status:       "enqueued",
-					QueueName:    queue_name,
-					SuccessCount: totalSuccess + successCount,
-					FailureCount: int64(len(messages)) - (totalSuccess + successCount),
-					// No failed messages in stopOnFailure mode
-				}, nil
-			}
-			// If some messages in the chunk failed, stop processing further
-			totalSuccess += successCount
-			if successCount < int64(len(chunk)) {
-				break
-			}
-		}
-		return &EnqueueBatchResponse{
-			Status:       "enqueued",
-			QueueName:    queue_name,
-			SuccessCount: totalSuccess,
-			FailureCount: int64(len(messages)) - totalSuccess,
-			// No failed messages in stopOnFailure mode
-		}, nil
-	case "partialSuccess":
-		failedMessages := make([]*FailedMessage, 0)
-		for _, chunk := range chunkedMsgs {
-			successCount, err := qs.Queue.EnqueueBatch(queue_name, chunk)
-			if err != nil {
-				qs.Logger.Error("Error enqueuing messages", "error", err)
-				// Mark all messages in this chunk as failed
-				startIndex := successCount
-				endIndex := int64(len(chunk))
-				for i := startIndex; i < endIndex; i++ {
-					if i == startIndex {
-						failedMessages = append(failedMessages, &FailedMessage{
-							Index:   totalSuccess + i,
-							Message: string(chunk[i].(string)),
-							Error:   err.Error(),
-						})
-					} else {
-						failedMessages = append(failedMessages, &FailedMessage{
-							Index:   totalSuccess + int64(i),
-							Message: string(chunk[i].(string)),
-							Error:   fmt.Errorf("skipped due to previous error").Error(),
-						})
-					}
-				}
-				totalSuccess += successCount
-			} else {
-				totalSuccess += successCount
-			}
-		}
-		return &EnqueueBatchResponse{
-			Status:         "enqueued",
-			QueueName:      queue_name,
-			SuccessCount:   totalSuccess,
-			FailureCount:   int64(len(messages)) - totalSuccess,
-			FailedMessages: failedMessages,
-		}, nil
-	default:
-		qs.Logger.Error("Error enqueuing messages", "error", "invalid mode")
-		return nil, fmt.Errorf("invalid mode")
+	batchResult, err := qs.Queue.EnqueueBatch(queue_name, mode, msgs)
+	if err != nil {
+		qs.Logger.Error("Error enqueuing messages", "error", err)
+		return nil, err
 	}
+
+	failedMessages := make([]*FailedMessage, len(batchResult.FailedMessages))
+	for i, fm := range batchResult.FailedMessages {
+		failedMessages[i] = &FailedMessage{
+			Index:   fm.Index,
+			Message: fm.Message.(string),
+			Error:   fm.Reason,
+		}
+	}
+
+	return &EnqueueBatchResponse{
+		Status:         "ok",
+		QueueName:      queue_name,
+		SuccessCount:   batchResult.SuccessCount,
+		FailureCount:   batchResult.FailedCount,
+		FailedMessages: failedMessages,
+	}, nil
 }
 
 func (qs *queueServiceServer) Dequeue(ctx context.Context, req *DequeueRequest) (res *DequeueResponse, err error) {

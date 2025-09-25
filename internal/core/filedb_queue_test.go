@@ -38,14 +38,14 @@ func TestFileDBQueueEnqueueBatchSuccess(t *testing.T) {
 	if err := queue.CreateQueue(queueName); err != nil {
 		t.Fatalf("failed to create queue: %v", err)
 	}
-
+	mode := "stopOnFailure"
 	batch := []interface{}{"first", map[string]interface{}{"foo": "bar"}}
-	successCount, err := queue.EnqueueBatch(queueName, batch)
+	batchResult, err := queue.EnqueueBatch(queueName, mode, batch)
 	if err != nil {
 		t.Fatalf("enqueue batch returned error: %v", err)
 	}
-	if successCount != int64(len(batch)) {
-		t.Fatalf("enqueue batch success count = %d, want %d", successCount, int64(len(batch)))
+	if batchResult.SuccessCount != int64(len(batch)) {
+		t.Fatalf("enqueue batch success count = %d, want %d", batchResult.SuccessCount, int64(len(batch)))
 	}
 
 	expected := []interface{}{"first", map[string]interface{}{"foo": "bar"}}
@@ -78,14 +78,14 @@ func TestFileDBQueueEnqueueBatchQueueNotFound(t *testing.T) {
 			t.Fatalf("failed to shutdown queue: %v", shutdownErr)
 		}
 	}()
-
+	mode := "stopOnFailure"
 	batch := []interface{}{"no-queue"}
-	successCount, err := queue.EnqueueBatch("missing-queue", batch)
+	batchResult, err := queue.EnqueueBatch("missing-queue", mode, batch)
 	if err == nil {
 		t.Fatal("expected error when enqueueing to missing queue, got nil")
 	}
-	if successCount != 0 {
-		t.Fatalf("success count = %d, want 0", successCount)
+	if batchResult.SuccessCount != 0 {
+		t.Fatalf("success count = %d, want 0", batchResult.SuccessCount)
 	}
 	if !strings.Contains(err.Error(), "queue not found") {
 		t.Fatalf("unexpected error: %v", err)

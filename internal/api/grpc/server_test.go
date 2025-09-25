@@ -29,9 +29,13 @@ func (m *mockQueue) DeleteQueue(string) error { return nil }
 
 func (m *mockQueue) Enqueue(string, interface{}) error { return nil }
 
-func (m *mockQueue) EnqueueBatch(queueName string, items []interface{}) (int64, error) {
+func (m *mockQueue) EnqueueBatch(queueName, mode string, items []interface{}) (internal.BatchResult, error) {
 	m.enqueueBatchCalls = append(m.enqueueBatchCalls, enqueueBatchCall{queueName: queueName, items: items})
-	return m.enqueueBatchResult, m.enqueueBatchError
+	return internal.BatchResult{
+		SuccessCount:   m.enqueueBatchResult,
+		FailedCount:    0,
+		FailedMessages: nil,
+	}, m.enqueueBatchError
 }
 
 func (m *mockQueue) Dequeue(string, string, string) (internal.QueueMessage, error) {
@@ -69,8 +73,8 @@ func TestQueueServiceEnqueueBatchSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("enqueue batch returned error: %v", err)
 	}
-	if resp.GetStatus() != "enqueued" {
-		t.Fatalf("response status = %s, want enqueued", resp.GetStatus())
+	if resp.GetStatus() != "ok" {
+		t.Fatalf("response status = %s, want ok", resp.GetStatus())
 	}
 
 	if resp.GetQueueName() != "test-queue" {
