@@ -20,7 +20,7 @@ type enqueueBatchCall struct {
 }
 
 type mockQueue struct {
-	enqueueBatchResult int
+	enqueueBatchResult int64
 	enqueueBatchError  error
 	enqueueBatchCalls  []enqueueBatchCall
 }
@@ -31,9 +31,13 @@ func (m *mockQueue) DeleteQueue(string) error { return nil }
 
 func (m *mockQueue) Enqueue(string, interface{}) error { return nil }
 
-func (m *mockQueue) EnqueueBatch(queueName string, items []interface{}) (int, error) {
+func (m *mockQueue) EnqueueBatch(queueName, mode string, items []interface{}) (internal.BatchResult, error) {
 	m.enqueueBatchCalls = append(m.enqueueBatchCalls, enqueueBatchCall{queueName: queueName, items: items})
-	return m.enqueueBatchResult, m.enqueueBatchError
+	return internal.BatchResult{
+		SuccessCount:   m.enqueueBatchResult,
+		FailedCount:    0,
+		FailedMessages: nil,
+	}, m.enqueueBatchError
 }
 
 func (m *mockQueue) Dequeue(string, string, string) (internal.QueueMessage, error) {
@@ -60,6 +64,7 @@ func TestEnqueueBatchHandlerSuccess(t *testing.T) {
 	server := &httpServerInstance{Queue: mq}
 
 	body := EnqueueBatchRequest{
+		Mode: "stopOnFailure",
 		Messages: []json.RawMessage{
 			json.RawMessage(`{"foo":"bar"}`),
 			json.RawMessage(`42`),
@@ -151,7 +156,7 @@ func TestEnqueueBatchHandlerQueueError(t *testing.T) {
 	mq := &mockQueue{enqueueBatchError: errors.New("boom")}
 	server := &httpServerInstance{Queue: mq}
 
-	body := EnqueueBatchRequest{Messages: []json.RawMessage{json.RawMessage(`"msg"`)}}
+	body := EnqueueBatchRequest{Mode: "stopOnFailure", Messages: []json.RawMessage{json.RawMessage(`"msg"`)}}
 	encoded, err := json.Marshal(body)
 	if err != nil {
 		t.Fatalf("failed to marshal request: %v", err)

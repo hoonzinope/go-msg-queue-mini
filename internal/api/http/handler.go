@@ -1,6 +1,7 @@
 package http
 
 import (
+	"encoding/json"
 	"errors"
 	"go-msg-queue-mini/internal/queue_error"
 	"net/http"
@@ -94,23 +95,42 @@ func (h *httpServerInstance) enqueueBatchHandler(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request payload"})
 		return
 	}
+	mode := req.Mode
+	if mode != "partialSuccess" && mode != "stopOnFailure" {
+		h.Logger.Error("Invalid mode", "mode", mode)
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid mode"})
+		return
+	}
 
 	msgs := make([]interface{}, len(req.Messages))
 	for i, msg := range req.Messages {
 		msgs[i] = msg
 	}
 
-	successCount, err := h.Queue.EnqueueBatch(queue_name, msgs)
+	batchResult, err := h.Queue.EnqueueBatch(queue_name, mode, msgs)
 	if err != nil {
 		h.Logger.Error("Error enqueuing messages", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to enqueue messages"})
 		return
 	}
 
-	c.JSON(http.StatusAccepted, EnqueueBatchResponse{
+	resp := EnqueueBatchResponse{
 		Status:       "enqueued",
-		SuccessCount: successCount,
-	})
+		SuccessCount: batchResult.SuccessCount,
+		FailureCount: batchResult.FailedCount,
+	}
+	if len(batchResult.FailedMessages) > 0 {
+		resp.FailedMessages = make([]FailedMessage, len(batchResult.FailedMessages))
+		for i, fm := range batchResult.FailedMessages {
+			resp.FailedMessages[i] = FailedMessage{
+				Index:   fm.Index,
+				Message: string(fm.Message.(json.RawMessage)),
+				Error:   fm.Reason,
+			}
+		}
+	}
+
+	c.JSON(http.StatusAccepted, resp)
 }
 
 func (h *httpServerInstance) dequeueHandler(c *gin.Context) {

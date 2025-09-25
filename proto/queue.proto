@@ -96,7 +96,8 @@ message EnqueueResponse {
 // EnqueueBatch request
 message EnqueueBatchRequest {
   string queue_name = 1;
-  repeated string messages = 2;
+  string mode = 2;
+  repeated string messages = 3;
 }
 
 // EnqueueBatch response
@@ -104,6 +105,15 @@ message EnqueueBatchResponse {
   string status = 1;
   string queue_name = 2;
   int64 success_count = 3;
+  int64 failure_count = 4;
+  repeated FailedMessage failed_messages = 5;
+}
+
+// FailedMessage 
+message FailedMessage {
+  int64 index = 1;
+  string message = 2;
+  string error = 3;
 }
 
 // HTTP: DequeueRequest{ group, consumer_id }
