@@ -131,7 +131,7 @@ func (q *fileDBQueue) _enqueueBatchStopOnFailure(queue_name string, items []inte
 	return successCount, nil
 }
 
-func (q *fileDBQueue) _enqueueBatchPartialSuccess(queue_name string, items []interface{}) (int64, []internal.FailedMessage, error) {
+func (q *fileDBQueue) _enqueueBatchPartialSuccess(queue_name string, items []interface{}, startIndex int64) (int64, []internal.FailedMessage, error) {
 	var successCount int64 = 0
 	var failedMessages []internal.FailedMessage
 	msgs := make([][]byte, 0, len(items))
@@ -150,7 +150,7 @@ func (q *fileDBQueue) _enqueueBatchPartialSuccess(queue_name string, items []int
 		// Mark insertFailedMessages as failed
 		for _, ifm := range insertFailedMessages {
 			failedMessages = append(failedMessages, internal.FailedMessage{
-				Index:   ifm.Index,
+				Index:   ifm.Index + startIndex,
 				Message: items[ifm.Index],
 				Reason:  ifm.Reason,
 			})
@@ -192,14 +192,16 @@ func (q *fileDBQueue) EnqueueBatch(queue_name, mode string, items []interface{})
 		}, stopError
 	case "partialSuccess":
 		returnFailedMessages := []internal.FailedMessage{}
+		currentIndex := int64(0)
+		// Track the current index across chunks
 		for _, chunk := range chunkedMsgs {
-			successCount, failedMessages, err := q._enqueueBatchPartialSuccess(queue_name, chunk)
+			successCount, failedMessages, err := q._enqueueBatchPartialSuccess(queue_name, chunk, currentIndex)
 			if err != nil {
 				q.logger.Error("Error enqueuing messages", "error", err)
 				// Mark all messages in this chunk as failed
 				for idx := range chunk {
 					returnFailedMessages = append(returnFailedMessages, internal.FailedMessage{
-						Index:   int64(totalSuccess) + int64(idx),
+						Index:   currentIndex + int64(idx),
 						Message: chunk[idx],
 						Reason:  fmt.Sprintf("enqueue error: %v", err),
 					})
@@ -208,6 +210,7 @@ func (q *fileDBQueue) EnqueueBatch(queue_name, mode string, items []interface{})
 				totalSuccess += successCount
 				returnFailedMessages = append(returnFailedMessages, failedMessages...)
 			}
+			currentIndex += int64(len(chunk))
 		}
 		return internal.BatchResult{
 			SuccessCount:   totalSuccess,
