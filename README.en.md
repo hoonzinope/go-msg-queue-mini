@@ -12,7 +12,7 @@ A compact yet robust Go-based message queue. It supports Producer/Consumer runti
 - **Lease/Renew**: Message lease with `/renew` to extend
 - **Peek**: Inspect next message without claiming via `/peek`
 - **Status**: `/status` returns totals for queue/acked/inflight/dlq
-- **Batch enqueue**: Load multiple messages at once via `/enqueue/batch` and gRPC `EnqueueBatch`
+- **Batch enqueue**: Load multiple messages at once via `/enqueue/batch` and gRPC `EnqueueBatch`, supporting `stopOnFailure`/`partialSuccess` modes
 - **Modes**: `debug` (local producers/consumers + monitor) or HTTP/gRPC server
 
 ## Quick Start
@@ -23,7 +23,7 @@ A compact yet robust Go-based message queue. It supports Producer/Consumer runti
 - Health: `curl -s localhost:8080/health`
 - Create queue: `curl -X POST localhost:8080/api/v1/default/create -H 'X-API-Key: $API_KEY'`
 - Enqueue: `curl -X POST localhost:8080/api/v1/default/enqueue -H 'Content-Type: application/json' -H 'X-API-Key: $API_KEY' -d '{"message": {"text":"hello"}}'`
-- Batch enqueue: `curl -X POST localhost:8080/api/v1/default/enqueue/batch -H 'Content-Type: application/json' -H 'X-API-Key: $API_KEY' -d '{"messages": [{"text":"hello"},{"text":"world"}]}'`
+- Batch enqueue: `curl -X POST localhost:8080/api/v1/default/enqueue/batch -H 'Content-Type: application/json' -H 'X-API-Key: $API_KEY' -d '{"mode":"partialSuccess","messages":[{"text":"hello"},{"text":"world"}]}'`
 - Dequeue: `curl -X POST localhost:8080/api/v1/default/dequeue -H 'Content-Type: application/json' -H 'X-API-Key: $API_KEY' -d '{"group":"g1","consumer_id":"c-1"}'`
 
 ## Project Structure
@@ -143,8 +143,9 @@ grpc:
   - Request: `{ "message": <any JSON> }`
   - Example: `curl -X POST localhost:8080/api/v1/default/enqueue -H 'Content-Type: application/json' -H 'X-API-Key: $API_KEY' -d '{"message": {"text":"hello"}}'`
 - Enqueue Batch: `POST /api/v1/:queue_name/enqueue/batch` (header: `X-API-Key: <key>` required)
-  - Request: `{ "messages": [<any JSON>, ...] }`
-  - Response: `202 Accepted`, `{ "status": "enqueued", "success_count": <int> }`
+  - Request: `{ "mode": "partialSuccess"|"stopOnFailure", "messages": [<any JSON>, ...] }`
+  - Response: `202 Accepted`, `{ "status": "enqueued", "success_count": <int>, "failure_count": <int>, "failed_messages": [{ "index": <int>, "message": "<raw>", "error": "<reason>" }, ...] }`
+  - Behavior: `stopOnFailure` stops on the first error and returns a 5xx, while `partialSuccess` enqueues what it can and reports failures via `failed_messages`.
 
 - Dequeue: `POST /api/v1/:queue_name/dequeue` (requires `X-API-Key`)
   - Request: `{ "group": "g1", "consumer_id": "c-1" }`
@@ -177,6 +178,7 @@ Common: server returns `X-Request-ID` (auto-generated if missing). Bursts may re
 - Health: `queue.v1.QueueService/HealthCheck` → `{ status: "ok" }`.
 - Core RPCs: `CreateQueue`, `DeleteQueue`, `Enqueue`, `EnqueueBatch`, `Dequeue`, `Ack`, `Nack`, `Peek`, `Renew`, `Status` (see `proto/queue.proto`).
 - Message type: gRPC `message` payloads are strings; HTTP accepts arbitrary JSON payloads.
+- For `EnqueueBatch`, set `mode` to `stopOnFailure` or `partialSuccess`; responses include `failure_count`/`failed_messages`, and `stopOnFailure` propagates errors as 5xx responses.
 - Example (grpcurl):
   - List services: `grpcurl -plaintext localhost:50051 list`
   - Batch enqueue: `grpcurl -plaintext -d '{"queue_name":"default","messages":["hello","world"]}' localhost:50051 queue.v1.QueueService/EnqueueBatch`

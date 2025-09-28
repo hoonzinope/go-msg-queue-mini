@@ -12,7 +12,7 @@
 - **리스/갱신**: 메시지 점유 기간(lease)과 `/renew`를 통한 연장
 - **미리보기/피킹**: 할당 없이 확인하는 `/peek`
 - **상태 확인**: 합계/ACK/Inflight/DLQ를 반환하는 `/status`
-- **배치 Enqueue**: `/enqueue/batch` 및 gRPC `EnqueueBatch`로 여러 메시지를 일괄 적재
+- **배치 Enqueue**: `/enqueue/batch` 및 gRPC `EnqueueBatch`로 여러 메시지를 일괄 적재하며 `stopOnFailure`/`partialSuccess` 모드를 지원
 - **운영 모드**: `debug` 모드(내장 프로듀서/컨슈머 + 모니터) 또는 HTTP/gRPC 서버
 
 ## 빠른 시작(Quick Start)
@@ -23,7 +23,7 @@
 - HTTP 헬스 확인: `curl -s localhost:8080/health`
 - 큐 생성: `curl -X POST localhost:8080/api/v1/default/create -H 'X-API-Key: $API_KEY'`
 - 메시지 Enqueue: `curl -X POST localhost:8080/api/v1/default/enqueue -H 'Content-Type: application/json' -H 'X-API-Key: $API_KEY' -d '{"message": {"text":"hello"}}'`
-- 메시지 Batch Enqueue: `curl -X POST localhost:8080/api/v1/default/enqueue/batch -H 'Content-Type: application/json' -H 'X-API-Key: $API_KEY' -d '{"messages": [{"text":"hello"},{"text":"world"}]}'`
+- 메시지 Batch Enqueue: `curl -X POST localhost:8080/api/v1/default/enqueue/batch -H 'Content-Type: application/json' -H 'X-API-Key: $API_KEY' -d '{"mode":"partialSuccess","messages":[{"text":"hello"},{"text":"world"}]}'`
 - 메시지 Dequeue: `curl -X POST localhost:8080/api/v1/default/dequeue -H 'Content-Type: application/json' -H 'X-API-Key: $API_KEY' -d '{"group":"g1","consumer_id":"c-1"}'`
 
 ## 프로젝트 구조
@@ -143,8 +143,9 @@ grpc:
   - 요청: `{ "message": <JSON format> }`
   - 예) `curl -X POST localhost:8080/api/v1/default/enqueue -H 'Content-Type: application/json' -H 'X-API-Key: $API_KEY' -d '{"message": {"text":"hello"}}'`
 - Enqueue Batch: `POST /api/v1/:queue_name/enqueue/batch` (헤더: `X-API-Key: <키>` 필요)
-  - 요청: `{ "messages": [<JSON format>, ...] }`
-  - 응답: `202 Accepted`, `{ "status": "enqueued", "success_count": <int> }`
+  - 요청: `{ "mode": "partialSuccess"|"stopOnFailure", "messages": [<JSON format>, ...] }`
+  - 응답: `202 Accepted`, `{ "status": "enqueued", "success_count": <int>, "failure_count": <int>, "failed_messages": [{ "index": <int>, "message": "<raw>", "error": "<reason>" }, ...] }`
+  - 동작: `stopOnFailure`는 첫 오류에서 중단하고 5xx로 실패를 반환하며, `partialSuccess`는 성공한 항목만 적재하고 실패 항목을 `failed_messages`에 포함합니다.
 
 - Dequeue: `POST /api/v1/:queue_name/dequeue` (헤더: `X-API-Key: <키>` 필요)
   - 요청: `{ "group": "g1", "consumer_id": "c-1" }`
@@ -177,6 +178,7 @@ grpc:
 - 헬스체크: `queue.v1.QueueService/HealthCheck` → `{ status: "ok" }`.
 - 주요 RPC: `CreateQueue`, `DeleteQueue`, `Enqueue`, `EnqueueBatch`, `Dequeue`, `Ack`, `Nack`, `Peek`, `Renew`, `Status` (proto: `proto/queue.proto`).
 - 메시지 타입: gRPC `message` 필드는 문자열(string)이며, HTTP는 임의의 JSON을 지원합니다.
+- `EnqueueBatch` 호출 시 `mode`를 `stopOnFailure` 또는 `partialSuccess`로 지정하고, 응답은 `failure_count`/`failed_messages`를 통해 부분 실패를 보고합니다. `stopOnFailure`에서 오류가 발생하면 전체 호출이 실패(5xx)로 끝납니다.
 - 호출 예시(grpcurl): `grpcurl -plaintext localhost:50051 list` / `grpcurl -plaintext -d '{"queue_name":"default","messages":["hi","there"]}' localhost:50051 queue.v1.QueueService/EnqueueBatch`.
 
 ## gRPC 인터셉터
@@ -200,7 +202,7 @@ grpc:
 - 필요 시 `-cover`로 커버리지 확인
 
 ## 변경 사항(요약)
-- 배치 Enqueue API 추가: HTTP `/enqueue/batch`, gRPC `EnqueueBatch`, 파일 DB 큐의 일괄 쓰기 지원.
+- 배치 Enqueue API 추가: HTTP `/enqueue/batch`, gRPC `EnqueueBatch`, 파일 DB 큐의 일괄 쓰기 (`stopOnFailure`/`partialSuccess`) 지원.
 - `log/slog` 기반 구조화 로깅으로 전환(디버그 텍스트, 서버 모드 JSON) 및 공통 필드 정비.
 - gRPC Queue Service와 인터셉터(로깅/에러/복구/API 키)를 추가하고 `proto/queue.proto`를 확장.
 - HTTP 서버를 server/handler/dto로 리팩터링하고 로깅·Request-ID·Rate Limit·API 키 미들웨어를 도입.
