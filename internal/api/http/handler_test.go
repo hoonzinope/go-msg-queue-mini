@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -12,17 +13,20 @@ import (
 
 	"go-msg-queue-mini/internal"
 	"go-msg-queue-mini/internal/queue_error"
+	"log/slog"
 )
 
 type enqueueBatchCall struct {
 	queueName string
+	mode      string
 	items     []interface{}
 }
 
 type mockQueue struct {
-	enqueueBatchResult int
-	enqueueBatchError  error
-	enqueueBatchCalls  []enqueueBatchCall
+	enqueueBatchResult   int64
+	enqueueBatchError    error
+	enqueueBatchCalls    []enqueueBatchCall
+	enqueueBatchResponse *internal.BatchResult
 }
 
 func (m *mockQueue) CreateQueue(string) error { return nil }
@@ -31,9 +35,16 @@ func (m *mockQueue) DeleteQueue(string) error { return nil }
 
 func (m *mockQueue) Enqueue(string, interface{}) error { return nil }
 
-func (m *mockQueue) EnqueueBatch(queueName string, items []interface{}) (int, error) {
-	m.enqueueBatchCalls = append(m.enqueueBatchCalls, enqueueBatchCall{queueName: queueName, items: items})
-	return m.enqueueBatchResult, m.enqueueBatchError
+func (m *mockQueue) EnqueueBatch(queueName, mode string, items []interface{}) (internal.BatchResult, error) {
+	m.enqueueBatchCalls = append(m.enqueueBatchCalls, enqueueBatchCall{queueName: queueName, mode: mode, items: items})
+	if m.enqueueBatchResponse != nil {
+		return *m.enqueueBatchResponse, m.enqueueBatchError
+	}
+	return internal.BatchResult{
+		SuccessCount:   m.enqueueBatchResult,
+		FailedCount:    0,
+		FailedMessages: nil,
+	}, m.enqueueBatchError
 }
 
 func (m *mockQueue) Dequeue(string, string, string) (internal.QueueMessage, error) {
@@ -54,12 +65,18 @@ func (m *mockQueue) Peek(string, string) (internal.QueueMessage, error) {
 
 func (m *mockQueue) Renew(string, string, int64, string, int) error { return nil }
 
+func newTestHTTPServer(queue internal.Queue) *httpServerInstance {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	return &httpServerInstance{Queue: queue, Logger: logger}
+}
+
 func TestEnqueueBatchHandlerSuccess(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	mq := &mockQueue{enqueueBatchResult: 2}
-	server := &httpServerInstance{Queue: mq}
+	server := newTestHTTPServer(mq)
 
 	body := EnqueueBatchRequest{
+		Mode: "stopOnFailure",
 		Messages: []json.RawMessage{
 			json.RawMessage(`{"foo":"bar"}`),
 			json.RawMessage(`42`),
@@ -89,6 +106,9 @@ func TestEnqueueBatchHandlerSuccess(t *testing.T) {
 	call := mq.enqueueBatchCalls[0]
 	if call.queueName != "test-queue" {
 		t.Fatalf("queue name = %s, want test-queue", call.queueName)
+	}
+	if call.mode != "stopOnFailure" {
+		t.Fatalf("mode = %s, want stopOnFailure", call.mode)
 	}
 	expectedItems := []interface{}{
 		json.RawMessage(`{"foo":"bar"}`),
@@ -124,10 +144,71 @@ func TestEnqueueBatchHandlerSuccess(t *testing.T) {
 	}
 }
 
+func TestEnqueueBatchHandlerPartialSuccess(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	failed := []internal.FailedMessage{{Index: 1, Message: json.RawMessage(`"bad"`), Reason: "duplicate message"}}
+	mq := &mockQueue{
+		enqueueBatchResponse: &internal.BatchResult{
+			SuccessCount:   1,
+			FailedCount:    1,
+			FailedMessages: failed,
+		},
+	}
+	server := newTestHTTPServer(mq)
+
+	body := EnqueueBatchRequest{Mode: "partialSuccess", Messages: []json.RawMessage{json.RawMessage(`"good"`), json.RawMessage(`"bad"`)}}
+	encoded, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("failed to marshal request: %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Set("queue_name", "partial-queue")
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/partial-queue/enqueue/batch", bytes.NewReader(encoded))
+	req.Header.Set("Content-Type", "application/json")
+	c.Request = req
+
+	server.enqueueBatchHandler(c)
+
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusAccepted)
+	}
+
+	if len(mq.enqueueBatchCalls) != 1 {
+		t.Fatalf("enqueue batch call count = %d, want 1", len(mq.enqueueBatchCalls))
+	}
+	call := mq.enqueueBatchCalls[0]
+	if call.mode != "partialSuccess" {
+		t.Fatalf("mode = %s, want partialSuccess", call.mode)
+	}
+
+	var resp EnqueueBatchResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to unmarshal response: %v", err)
+	}
+	if resp.FailureCount != 1 {
+		t.Fatalf("failure count = %d, want 1", resp.FailureCount)
+	}
+	if len(resp.FailedMessages) != 1 {
+		t.Fatalf("failed messages = %d, want 1", len(resp.FailedMessages))
+	}
+	fm := resp.FailedMessages[0]
+	if fm.Index != 1 {
+		t.Fatalf("failed message index = %d, want 1", fm.Index)
+	}
+	if fm.Message != "\"bad\"" {
+		t.Fatalf("failed message payload = %s, want \"bad\"", fm.Message)
+	}
+	if fm.Error != "duplicate message" {
+		t.Fatalf("failed message error = %s, want duplicate message", fm.Error)
+	}
+}
+
 func TestEnqueueBatchHandlerBindError(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	mq := &mockQueue{}
-	server := &httpServerInstance{Queue: mq}
+	server := newTestHTTPServer(mq)
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
@@ -149,9 +230,9 @@ func TestEnqueueBatchHandlerBindError(t *testing.T) {
 func TestEnqueueBatchHandlerQueueError(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	mq := &mockQueue{enqueueBatchError: errors.New("boom")}
-	server := &httpServerInstance{Queue: mq}
+	server := newTestHTTPServer(mq)
 
-	body := EnqueueBatchRequest{Messages: []json.RawMessage{json.RawMessage(`"msg"`)}}
+	body := EnqueueBatchRequest{Mode: "stopOnFailure", Messages: []json.RawMessage{json.RawMessage(`"msg"`)}}
 	encoded, err := json.Marshal(body)
 	if err != nil {
 		t.Fatalf("failed to marshal request: %v", err)

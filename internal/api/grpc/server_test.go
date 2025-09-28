@@ -3,8 +3,8 @@ package grpc
 import (
 	"context"
 	"errors"
+	"io"
 	"log/slog"
-	"os"
 	"reflect"
 	"testing"
 
@@ -14,13 +14,15 @@ import (
 
 type enqueueBatchCall struct {
 	queueName string
+	mode      string
 	items     []interface{}
 }
 
 type mockQueue struct {
-	enqueueBatchResult int
-	enqueueBatchError  error
-	enqueueBatchCalls  []enqueueBatchCall
+	enqueueBatchResult   int64
+	enqueueBatchError    error
+	enqueueBatchCalls    []enqueueBatchCall
+	enqueueBatchResponse *internal.BatchResult
 }
 
 func (m *mockQueue) CreateQueue(string) error { return nil }
@@ -29,9 +31,16 @@ func (m *mockQueue) DeleteQueue(string) error { return nil }
 
 func (m *mockQueue) Enqueue(string, interface{}) error { return nil }
 
-func (m *mockQueue) EnqueueBatch(queueName string, items []interface{}) (int, error) {
-	m.enqueueBatchCalls = append(m.enqueueBatchCalls, enqueueBatchCall{queueName: queueName, items: items})
-	return m.enqueueBatchResult, m.enqueueBatchError
+func (m *mockQueue) EnqueueBatch(queueName, mode string, items []interface{}) (internal.BatchResult, error) {
+	m.enqueueBatchCalls = append(m.enqueueBatchCalls, enqueueBatchCall{queueName: queueName, mode: mode, items: items})
+	if m.enqueueBatchResponse != nil {
+		return *m.enqueueBatchResponse, m.enqueueBatchError
+	}
+	return internal.BatchResult{
+		SuccessCount:   m.enqueueBatchResult,
+		FailedCount:    0,
+		FailedMessages: nil,
+	}, m.enqueueBatchError
 }
 
 func (m *mockQueue) Dequeue(string, string, string) (internal.QueueMessage, error) {
@@ -54,13 +63,18 @@ func (m *mockQueue) Peek(string, string) (internal.QueueMessage, error) {
 
 func (m *mockQueue) Renew(string, string, int64, string, int) error { return nil }
 
+func newTestGRPCServer(queue internal.Queue) *queueServiceServer {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	return NewQueueServiceServer(queue, logger)
+}
+
 func TestQueueServiceEnqueueBatchSuccess(t *testing.T) {
 	mq := &mockQueue{enqueueBatchResult: 2}
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-	server := NewQueueServiceServer(mq, logger)
+	server := newTestGRPCServer(mq)
 
 	req := &EnqueueBatchRequest{
 		QueueName: "test-queue",
+		Mode:      "stopOnFailure",
 		Messages:  []string{"first", "second"},
 	}
 
@@ -87,18 +101,60 @@ func TestQueueServiceEnqueueBatchSuccess(t *testing.T) {
 	if call.queueName != "test-queue" {
 		t.Fatalf("queue name = %s, want test-queue", call.queueName)
 	}
+	if call.mode != "stopOnFailure" {
+		t.Fatalf("mode = %s, want stopOnFailure", call.mode)
+	}
 	expectedItems := []interface{}{"first", "second"}
 	if !reflect.DeepEqual(call.items, expectedItems) {
 		t.Fatalf("enqueue items = %#v, want %#v", call.items, expectedItems)
 	}
 }
 
+func TestQueueServiceEnqueueBatchPartialSuccess(t *testing.T) {
+	mq := &mockQueue{
+		enqueueBatchResponse: &internal.BatchResult{
+			SuccessCount: 1,
+			FailedCount:  1,
+			FailedMessages: []internal.FailedMessage{
+				{Index: 2, Message: "bad", Reason: "duplicate"},
+			},
+		},
+	}
+	server := newTestGRPCServer(mq)
+
+	req := &EnqueueBatchRequest{
+		QueueName: "test-queue",
+		Mode:      "partialSuccess",
+		Messages:  []string{"first", "second", "third"},
+	}
+
+	resp, err := server.EnqueueBatch(context.Background(), req)
+	if err != nil {
+		t.Fatalf("enqueue batch returned error: %v", err)
+	}
+	if resp.GetFailureCount() != 1 {
+		t.Fatalf("failure count = %d, want 1", resp.GetFailureCount())
+	}
+	if len(resp.GetFailedMessages()) != 1 {
+		t.Fatalf("failed messages = %d, want 1", len(resp.GetFailedMessages()))
+	}
+	fm := resp.GetFailedMessages()[0]
+	if fm.GetIndex() != 2 {
+		t.Fatalf("failed message index = %d, want 2", fm.GetIndex())
+	}
+	if fm.GetMessage() != "bad" {
+		t.Fatalf("failed message payload = %s, want bad", fm.GetMessage())
+	}
+	if fm.GetError() != "duplicate" {
+		t.Fatalf("failed message error = %s, want duplicate", fm.GetError())
+	}
+}
+
 func TestQueueServiceEnqueueBatchMissingQueueName(t *testing.T) {
 	mq := &mockQueue{}
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-	server := NewQueueServiceServer(mq, logger)
+	server := newTestGRPCServer(mq)
 
-	req := &EnqueueBatchRequest{QueueName: "", Messages: []string{"msg"}}
+	req := &EnqueueBatchRequest{QueueName: "", Mode: "stopOnFailure", Messages: []string{"msg"}}
 
 	resp, err := server.EnqueueBatch(context.Background(), req)
 	if err == nil {
@@ -114,10 +170,9 @@ func TestQueueServiceEnqueueBatchMissingQueueName(t *testing.T) {
 
 func TestQueueServiceEnqueueBatchEmptyMessages(t *testing.T) {
 	mq := &mockQueue{}
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-	server := NewQueueServiceServer(mq, logger)
+	server := newTestGRPCServer(mq)
 
-	req := &EnqueueBatchRequest{QueueName: "test-queue", Messages: []string{}}
+	req := &EnqueueBatchRequest{QueueName: "test-queue", Mode: "stopOnFailure", Messages: []string{}}
 
 	resp, err := server.EnqueueBatch(context.Background(), req)
 	if err == nil {
@@ -133,10 +188,9 @@ func TestQueueServiceEnqueueBatchEmptyMessages(t *testing.T) {
 
 func TestQueueServiceEnqueueBatchQueueError(t *testing.T) {
 	mq := &mockQueue{enqueueBatchError: errors.New("boom")}
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-	server := NewQueueServiceServer(mq, logger)
+	server := newTestGRPCServer(mq)
 
-	req := &EnqueueBatchRequest{QueueName: "test-queue", Messages: []string{"msg"}}
+	req := &EnqueueBatchRequest{QueueName: "test-queue", Mode: "stopOnFailure", Messages: []string{"msg"}}
 
 	resp, err := server.EnqueueBatch(context.Background(), req)
 	if err == nil {

@@ -113,6 +113,13 @@ func (qs *queueServiceServer) EnqueueBatch(ctx context.Context, req *EnqueueBatc
 		qs.Logger.Error("Error enqueuing messages", "error", "queue name is required")
 		return nil, fmt.Errorf("queue name is required")
 	}
+
+	mode := req.GetMode()
+	if mode != "partialSuccess" && mode != "stopOnFailure" {
+		qs.Logger.Error("Error enqueuing messages", "error", "invalid mode")
+		return nil, fmt.Errorf("invalid mode")
+	}
+
 	messages := req.GetMessages()
 	if len(messages) == 0 {
 		qs.Logger.Error("Error enqueuing messages", "error", "messages are required")
@@ -122,12 +129,29 @@ func (qs *queueServiceServer) EnqueueBatch(ctx context.Context, req *EnqueueBatc
 	for i, msg := range messages {
 		msgs[i] = msg
 	}
-	successCount, err := qs.Queue.EnqueueBatch(queue_name, msgs)
+
+	batchResult, err := qs.Queue.EnqueueBatch(queue_name, mode, msgs)
 	if err != nil {
 		qs.Logger.Error("Error enqueuing messages", "error", err)
 		return nil, err
 	}
-	return &EnqueueBatchResponse{Status: "ok", QueueName: queue_name, SuccessCount: int64(successCount)}, nil
+
+	failedMessages := make([]*FailedMessage, len(batchResult.FailedMessages))
+	for i, fm := range batchResult.FailedMessages {
+		failedMessages[i] = &FailedMessage{
+			Index:   fm.Index,
+			Message: fm.Message.(string),
+			Error:   fm.Reason,
+		}
+	}
+
+	return &EnqueueBatchResponse{
+		Status:         "ok",
+		QueueName:      queue_name,
+		SuccessCount:   batchResult.SuccessCount,
+		FailureCount:   batchResult.FailedCount,
+		FailedMessages: failedMessages,
+	}, nil
 }
 
 func (qs *queueServiceServer) Dequeue(ctx context.Context, req *DequeueRequest) (res *DequeueResponse, err error) {

@@ -12,12 +12,21 @@ type EnqueueResponse struct {
 }
 
 type EnqueueBatchRequest struct {
+	Mode     string            `json:"mode" binding:"required,oneof=partialSuccess stopOnFailure"`
 	Messages []json.RawMessage `json:"messages" binding:"required"`
 }
 
 type EnqueueBatchResponse struct {
-	Status       string `json:"status"`
-	SuccessCount int    `json:"success_count"`
+	Status         string          `json:"status"`
+	SuccessCount   int64           `json:"success_count"`
+	FailureCount   int64           `json:"failure_count"`
+	FailedMessages []FailedMessage `json:"failed_messages"`
+}
+
+type FailedMessage struct {
+	Index   int64  `json:"index"`
+	Message string `json:"message"`
+	Error   string `json:"error"`
 }
 
 type DequeueRequest struct {

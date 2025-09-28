@@ -7,6 +7,7 @@ import (
 	"go-msg-queue-mini/internal"
 	"go-msg-queue-mini/internal/metrics"
 	"go-msg-queue-mini/internal/queue_error"
+	"go-msg-queue-mini/util"
 	"log/slog"
 	"os"
 	"sync"
@@ -109,8 +110,8 @@ func (q *fileDBQueue) Enqueue(queue_name string, item interface{}) error {
 	return nil
 }
 
-func (q *fileDBQueue) EnqueueBatch(queue_name string, items []interface{}) (int, error) {
-	successCount := 0
+func (q *fileDBQueue) _enqueueBatchStopOnFailure(queue_name string, items []interface{}) (int64, error) {
+	var successCount int64 = 0
 	msgs := make([][]byte, 0, len(items))
 	for _, item := range items {
 		msg, err := json.Marshal(item)
@@ -120,14 +121,102 @@ func (q *fileDBQueue) EnqueueBatch(queue_name string, items []interface{}) (int,
 		}
 		msgs = append(msgs, msg)
 	}
-
-	successCount, err := q.manager.WriteMessagesBatch(queue_name, msgs)
+	pid := 0
+	successCount, err := q.manager.WriteMessagesBatchWithMeta(queue_name, msgs, pid)
 	if err != nil {
 		q.logger.Error("Error writing batch messages to queue", "error", err)
 		return successCount, err
 	}
 	q.MQMetrics.EnqueueCounter.WithLabelValues(queue_name).Add(float64(successCount))
 	return successCount, nil
+}
+
+func (q *fileDBQueue) _enqueueBatchPartialSuccess(queue_name string, items []interface{}, startIndex int64) (int64, []internal.FailedMessage, error) {
+	var successCount int64 = 0
+	var failedMessages []internal.FailedMessage
+	msgs := make([][]byte, 0, len(items))
+	for idx, item := range items {
+		msg, err := json.Marshal(item)
+		if err != nil {
+			q.logger.Error("Error marshaling message", "error", err)
+			return 0, failedMessages, fmt.Errorf("failed to marshal message at index %d: %w", idx, err)
+		}
+		msgs = append(msgs, msg)
+	}
+	pid := 0
+	successCount, insertFailedMessages, err := q.manager.WriteMessagesBatchWithMetaAndReturnFailed(queue_name, msgs, pid)
+	if err != nil {
+		q.logger.Error("Error writing batch messages to queue", "error", err)
+		// Mark insertFailedMessages as failed
+		for _, ifm := range insertFailedMessages {
+			failedMessages = append(failedMessages, internal.FailedMessage{
+				Index:   ifm.Index + startIndex,
+				Message: items[ifm.Index],
+				Reason:  ifm.Reason,
+			})
+		}
+		return successCount, failedMessages, err
+	}
+	q.MQMetrics.EnqueueCounter.WithLabelValues(queue_name).Add(float64(successCount))
+	return successCount, failedMessages, nil
+}
+
+func (q *fileDBQueue) EnqueueBatch(queue_name, mode string, items []interface{}) (internal.BatchResult, error) {
+	chunkedMsgs := util.ChunkSlice(items, 100) // Chunk size of 100
+	var totalSuccess int64 = 0
+	var stopError error = nil
+	var failedMessages []internal.FailedMessage
+	switch mode {
+	case "stopOnFailure":
+		for _, chunk := range chunkedMsgs {
+			successCount, err := q._enqueueBatchStopOnFailure(queue_name, chunk)
+			if err != nil {
+				q.logger.Error("Error enqueuing messages", "error", err)
+				return internal.BatchResult{
+					SuccessCount:   totalSuccess,
+					FailedCount:    int64(len(items)) - totalSuccess,
+					FailedMessages: failedMessages,
+				}, err
+			}
+			// If some messages in the chunk failed, stop processing further
+			totalSuccess += successCount
+			stopError = err
+			if successCount < int64(len(chunk)) {
+				break
+			}
+		}
+		return internal.BatchResult{
+			SuccessCount:   totalSuccess,
+			FailedCount:    int64(len(items)) - totalSuccess,
+			FailedMessages: failedMessages,
+		}, stopError
+	case "partialSuccess":
+		returnFailedMessages := []internal.FailedMessage{}
+		currentIndex := int64(0)
+		// Track the current index across chunks
+		for _, chunk := range chunkedMsgs {
+			successCount, failedMessages, err := q._enqueueBatchPartialSuccess(queue_name, chunk, currentIndex)
+			if err != nil {
+				q.logger.Error("Error enqueuing messages", "error", err)
+				// Mark all messages in this chunk as failed
+				for idx := range failedMessages {
+					failedMessages[idx].Index += currentIndex
+				}
+				returnFailedMessages = append(returnFailedMessages, failedMessages...)
+			} else {
+				totalSuccess += successCount
+				returnFailedMessages = append(returnFailedMessages, failedMessages...)
+			}
+			currentIndex += int64(len(chunk))
+		}
+		return internal.BatchResult{
+			SuccessCount:   totalSuccess,
+			FailedCount:    int64(len(items)) - totalSuccess,
+			FailedMessages: returnFailedMessages,
+		}, nil
+	default:
+		return internal.BatchResult{}, fmt.Errorf("invalid mode: %s", mode)
+	}
 }
 
 func (q *fileDBQueue) Dequeue(queue_name, consumer_group string, consumer_id string) (internal.QueueMessage, error) {

@@ -2,6 +2,7 @@ package core
 
 import (
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"reflect"
@@ -22,30 +23,41 @@ func newTestConfig() *internal.Config {
 	return cfg
 }
 
-func TestFileDBQueueEnqueueBatchSuccess(t *testing.T) {
+func newTestQueue(t *testing.T) *fileDBQueue {
+	t.Helper()
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	queue, err := NewFileDBQueue(newTestConfig(), logger)
 	if err != nil {
 		t.Fatalf("failed to create filedb queue: %v", err)
 	}
-	defer func() {
+	t.Cleanup(func() {
 		if shutdownErr := queue.Shutdown(); shutdownErr != nil {
 			t.Fatalf("failed to shutdown queue: %v", shutdownErr)
 		}
-	}()
+	})
+	return queue
+}
 
-	queueName := "enqueue-batch-success"
+func createQueueOrFail(t *testing.T, queue *fileDBQueue, queueName string) {
+	t.Helper()
 	if err := queue.CreateQueue(queueName); err != nil {
 		t.Fatalf("failed to create queue: %v", err)
 	}
+}
 
+func TestFileDBQueueEnqueueBatchSuccess(t *testing.T) {
+	queue := newTestQueue(t)
+	queueName := "enqueue-batch-success"
+	createQueueOrFail(t, queue, queueName)
+
+	mode := "stopOnFailure"
 	batch := []interface{}{"first", map[string]interface{}{"foo": "bar"}}
-	successCount, err := queue.EnqueueBatch(queueName, batch)
+	batchResult, err := queue.EnqueueBatch(queueName, mode, batch)
 	if err != nil {
 		t.Fatalf("enqueue batch returned error: %v", err)
 	}
-	if successCount != len(batch) {
-		t.Fatalf("enqueue batch success count = %d, want %d", successCount, len(batch))
+	if batchResult.SuccessCount != int64(len(batch)) {
+		t.Fatalf("enqueue batch success count = %d, want %d", batchResult.SuccessCount, int64(len(batch)))
 	}
 
 	expected := []interface{}{"first", map[string]interface{}{"foo": "bar"}}
@@ -68,26 +80,95 @@ func TestFileDBQueueEnqueueBatchSuccess(t *testing.T) {
 }
 
 func TestFileDBQueueEnqueueBatchQueueNotFound(t *testing.T) {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-	queue, err := NewFileDBQueue(newTestConfig(), logger)
-	if err != nil {
-		t.Fatalf("failed to create filedb queue: %v", err)
-	}
-	defer func() {
-		if shutdownErr := queue.Shutdown(); shutdownErr != nil {
-			t.Fatalf("failed to shutdown queue: %v", shutdownErr)
-		}
-	}()
-
+	queue := newTestQueue(t)
+	mode := "stopOnFailure"
 	batch := []interface{}{"no-queue"}
-	successCount, err := queue.EnqueueBatch("missing-queue", batch)
+	batchResult, err := queue.EnqueueBatch("missing-queue", mode, batch)
 	if err == nil {
 		t.Fatal("expected error when enqueueing to missing queue, got nil")
 	}
-	if successCount != 0 {
-		t.Fatalf("success count = %d, want 0", successCount)
+	if batchResult.SuccessCount != 0 {
+		t.Fatalf("success count = %d, want 0", batchResult.SuccessCount)
 	}
 	if !strings.Contains(err.Error(), "queue not found") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestFileDBQueueEnqueueBatchStopOnFailureMarshalError(t *testing.T) {
+	queue := newTestQueue(t)
+	queueName := "enqueue-batch-stop-on-failure-marshal-error"
+	createQueueOrFail(t, queue, queueName)
+
+	invalid := make(chan int)
+	batch := []interface{}{"valid", invalid}
+
+	result, err := queue.EnqueueBatch(queueName, "stopOnFailure", batch)
+	if err == nil {
+		t.Fatal("expected marshal error, got nil")
+	}
+	if !strings.Contains(err.Error(), "json: unsupported type: chan int") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.SuccessCount != 0 {
+		t.Fatalf("success count = %d, want 0", result.SuccessCount)
+	}
+	if result.FailedCount != int64(len(batch)) {
+		t.Fatalf("failed count = %d, want %d", result.FailedCount, len(batch))
+	}
+	if len(result.FailedMessages) != 0 {
+		t.Fatalf("expected no failed messages details, got %d", len(result.FailedMessages))
+	}
+
+	if _, err := queue.Dequeue(queueName, "group-stop", "consumer-stop"); !errors.Is(err, queue_error.ErrEmpty) {
+		t.Fatalf("expected empty queue after failure, got %v", err)
+	}
+}
+
+func TestFileDBQueueEnqueueBatchPartialSuccessChunkError(t *testing.T) {
+	queue := newTestQueue(t)
+	queueName := "enqueue-batch-partial-success-chunk-error"
+	createQueueOrFail(t, queue, queueName)
+
+	items := make([]interface{}, 101)
+	for i := 0; i < 100; i++ {
+		items[i] = fmt.Sprintf("msg-%03d", i)
+	}
+	items[100] = make(chan int)
+
+	result, err := queue.EnqueueBatch(queueName, "partialSuccess", items)
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if result.SuccessCount != 100 {
+		t.Fatalf("success count = %d, want 100", result.SuccessCount)
+	}
+	if result.FailedCount != 1 {
+		t.Fatalf("failed count = %d, want 1", result.FailedCount)
+	}
+	if len(result.FailedMessages) != 0 {
+		t.Fatalf("expected no failed message details, got %d", len(result.FailedMessages))
+	}
+
+	for i := 0; i < 100; i++ {
+		msg, err := queue.Dequeue(queueName, "group-partial", "consumer-partial")
+		if err != nil {
+			t.Fatalf("dequeue failed at index %d: %v", i, err)
+		}
+		want := fmt.Sprintf("msg-%03d", i)
+		payload, ok := msg.Payload.(string)
+		if !ok {
+			t.Fatalf("expected payload to be string, got %T", msg.Payload)
+		}
+		if payload != want {
+			t.Fatalf("payload = %s, want %s", payload, want)
+		}
+		if ackErr := queue.Ack(queueName, "group-partial", msg.ID, msg.Receipt); ackErr != nil {
+			t.Fatalf("ack failed for message %d: %v", i, ackErr)
+		}
+	}
+
+	if _, err := queue.Dequeue(queueName, "group-partial", "consumer-partial"); !errors.Is(err, queue_error.ErrEmpty) {
+		t.Fatalf("expected empty queue after draining, got %v", err)
 	}
 }
