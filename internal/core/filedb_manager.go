@@ -34,6 +34,12 @@ type queueMsg struct {
 	PartitionID int    // 복제시 파티션 식별용
 }
 
+type InsertFailedMessage struct {
+	Index   int64
+	Reason  string
+	Message []byte
+}
+
 var OneDayInSeconds = 24 * 60 * 60 // 24 hours
 
 func NewFileDBManager(dsn string, queueType string, logger *slog.Logger) (*FileDBManager, error) {
@@ -457,6 +463,70 @@ func (m *FileDBManager) WriteMessagesBatchWithMeta(queue_name string, msgs [][]b
 		return 0, err
 	}
 	return successCount, nil
+}
+
+func (m *FileDBManager) WriteMessagesBatchWithMetaAndReturnFailed(queue_name string, msgs [][]byte, partitionID int) (int64, []InsertFailedMessage, error) {
+	queueInfoID, err := m.getQueueInfoID(queue_name)
+	if err != nil {
+		return 0, nil, err
+	}
+	var failedMessages []InsertFailedMessage
+	successCount, err := m.inTxWithCount(func(tx *sql.Tx) (int64, error) {
+		stmt, err := tx.Prepare(`
+			INSERT INTO queue 
+			(queue_info_id, msg, global_id, partition_id) 
+			VALUES (?, ?, ?, ?)
+			ON CONFLICT(queue_info_id, global_id) DO NOTHING
+			`)
+		if err != nil {
+			return 0, err
+		}
+		defer stmt.Close()
+
+		var txCnt int64 = 0
+		for i, msg := range msgs {
+			globalID := util.GenerateGlobalID()
+			// msg 단위 savepoint
+			sp := fmt.Sprintf("sp_%d", i)
+			if _, err := tx.Exec(fmt.Sprintf("SAVEPOINT %s;", sp)); err != nil {
+
+			}
+			res, insertErr := stmt.Exec(queueInfoID, msg, globalID, partitionID)
+			if insertErr != nil {
+				_, _ = tx.Exec(fmt.Sprintf("ROLLBACK TO %s;", sp))
+				_, _ = tx.Exec(fmt.Sprintf("RELEASE %s;", sp))
+				failedMessages = append(failedMessages, InsertFailedMessage{
+					Index:   int64(i),
+					Reason:  insertErr.Error(),
+					Message: msg,
+				})
+				continue
+			}
+
+			if ra, _ := res.RowsAffected(); ra == 0 {
+				// 중복으로 삽입 안된 경우
+				_, _ = tx.Exec(fmt.Sprintf("ROLLBACK TO %s;", sp))
+				_, _ = tx.Exec(fmt.Sprintf("RELEASE %s;", sp))
+				failedMessages = append(failedMessages, InsertFailedMessage{
+					Index:   int64(i),
+					Reason:  "duplicate message",
+					Message: msg,
+				})
+				continue
+			}
+
+			if _, err := tx.Exec(fmt.Sprintf("RELEASE %s;", sp)); err != nil {
+				_, _ = tx.Exec(fmt.Sprintf("ROLLBACK TO %s;", sp))
+			}
+			txCnt++
+		}
+		if txCnt > 0 {
+			return txCnt, nil
+		} else {
+			return 0, fmt.Errorf("all messages failed to insert")
+		}
+	})
+	return successCount, failedMessages, err
 }
 
 func (m *FileDBManager) ReadMessage(queue_name, group, consumerID string, leaseSec int) (_ queueMsg, err error) {

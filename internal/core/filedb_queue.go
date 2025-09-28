@@ -110,7 +110,7 @@ func (q *fileDBQueue) Enqueue(queue_name string, item interface{}) error {
 	return nil
 }
 
-func (q *fileDBQueue) _enqueueBatch(queue_name string, items []interface{}) (int64, error) {
+func (q *fileDBQueue) _enqueueBatchStopOnFailure(queue_name string, items []interface{}) (int64, error) {
 	var successCount int64 = 0
 	msgs := make([][]byte, 0, len(items))
 	for _, item := range items {
@@ -121,8 +121,8 @@ func (q *fileDBQueue) _enqueueBatch(queue_name string, items []interface{}) (int
 		}
 		msgs = append(msgs, msg)
 	}
-
-	successCount, err := q.manager.WriteMessagesBatch(queue_name, msgs)
+	pid := 0
+	successCount, err := q.manager.WriteMessagesBatchWithMeta(queue_name, msgs, pid)
 	if err != nil {
 		q.logger.Error("Error writing batch messages to queue", "error", err)
 		return successCount, err
@@ -131,14 +131,45 @@ func (q *fileDBQueue) _enqueueBatch(queue_name string, items []interface{}) (int
 	return successCount, nil
 }
 
+func (q *fileDBQueue) _enqueueBatchPartialSuccess(queue_name string, items []interface{}) (int64, []internal.FailedMessage, error) {
+	var successCount int64 = 0
+	var failedMessages []internal.FailedMessage
+	msgs := make([][]byte, 0, len(items))
+	for idx, item := range items {
+		msg, err := json.Marshal(item)
+		if err != nil {
+			q.logger.Error("Error marshaling message", "error", err)
+			return 0, failedMessages, fmt.Errorf("failed to marshal message at index %d: %w", idx, err)
+		}
+		msgs = append(msgs, msg)
+	}
+	pid := 0
+	successCount, insertFailedMessages, err := q.manager.WriteMessagesBatchWithMetaAndReturnFailed(queue_name, msgs, pid)
+	if err != nil {
+		q.logger.Error("Error writing batch messages to queue", "error", err)
+		// Mark insertFailedMessages as failed
+		for _, ifm := range insertFailedMessages {
+			failedMessages = append(failedMessages, internal.FailedMessage{
+				Index:   ifm.Index,
+				Message: items[ifm.Index],
+				Reason:  ifm.Reason,
+			})
+		}
+		return successCount, failedMessages, err
+	}
+	q.MQMetrics.EnqueueCounter.WithLabelValues(queue_name).Add(float64(successCount))
+	return successCount, failedMessages, nil
+}
+
 func (q *fileDBQueue) EnqueueBatch(queue_name, mode string, items []interface{}) (internal.BatchResult, error) {
 	chunkedMsgs := util.ChunkSlice(items, 100) // Chunk size of 100
 	var totalSuccess int64 = 0
+	var stopError error = nil
 	var failedMessages []internal.FailedMessage
 	switch mode {
 	case "stopOnFailure":
 		for _, chunk := range chunkedMsgs {
-			successCount, err := q._enqueueBatch(queue_name, chunk)
+			successCount, err := q._enqueueBatchStopOnFailure(queue_name, chunk)
 			if err != nil {
 				q.logger.Error("Error enqueuing messages", "error", err)
 				return internal.BatchResult{
@@ -149,6 +180,7 @@ func (q *fileDBQueue) EnqueueBatch(queue_name, mode string, items []interface{})
 			}
 			// If some messages in the chunk failed, stop processing further
 			totalSuccess += successCount
+			stopError = err
 			if successCount < int64(len(chunk)) {
 				break
 			}
@@ -157,37 +189,30 @@ func (q *fileDBQueue) EnqueueBatch(queue_name, mode string, items []interface{})
 			SuccessCount:   totalSuccess,
 			FailedCount:    int64(len(items)) - totalSuccess,
 			FailedMessages: failedMessages,
-		}, nil
+		}, stopError
 	case "partialSuccess":
+		returnFailedMessages := []internal.FailedMessage{}
 		for _, chunk := range chunkedMsgs {
-			successCount, err := q._enqueueBatch(queue_name, chunk)
+			successCount, failedMessages, err := q._enqueueBatchPartialSuccess(queue_name, chunk)
 			if err != nil {
 				q.logger.Error("Error enqueuing messages", "error", err)
 				// Mark all messages in this chunk as failed
-				startIndex := successCount
-				endIndex := int64(len(chunk))
-				for i := startIndex; i < endIndex; i++ {
-					if i == startIndex {
-						failedMessages = append(failedMessages, internal.FailedMessage{
-							Index:   totalSuccess + i,
-							Message: chunk[i],
-							Reason:  err.Error(),
-						})
-					} else {
-						failedMessages = append(failedMessages, internal.FailedMessage{
-							Index:   totalSuccess + i,
-							Message: chunk[i],
-							Reason:  "Enqueue failed due to previous error",
-						})
-					}
+				for idx := range chunk {
+					returnFailedMessages = append(returnFailedMessages, internal.FailedMessage{
+						Index:   int64(totalSuccess) + int64(idx),
+						Message: chunk[idx],
+						Reason:  fmt.Sprintf("enqueue error: %v", err),
+					})
 				}
+			} else {
+				totalSuccess += successCount
+				returnFailedMessages = append(returnFailedMessages, failedMessages...)
 			}
-			totalSuccess += successCount
 		}
 		return internal.BatchResult{
 			SuccessCount:   totalSuccess,
 			FailedCount:    int64(len(items)) - totalSuccess,
-			FailedMessages: failedMessages,
+			FailedMessages: returnFailedMessages,
 		}, nil
 	default:
 		return internal.BatchResult{}, fmt.Errorf("invalid mode: %s", mode)
