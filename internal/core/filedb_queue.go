@@ -173,10 +173,10 @@ func (q *fileDBQueue) EnqueueBatch(queue_name, mode string, items []interface{})
 			if err != nil {
 				q.logger.Error("Error enqueuing messages", "error", err)
 				return internal.BatchResult{
-					SuccessCount:   totalSuccess + successCount,
-					FailedCount:    int64(len(items)) - (totalSuccess + successCount),
+					SuccessCount:   totalSuccess,
+					FailedCount:    int64(len(items)) - totalSuccess,
 					FailedMessages: failedMessages,
-				}, nil
+				}, err
 			}
 			// If some messages in the chunk failed, stop processing further
 			totalSuccess += successCount
@@ -199,13 +199,10 @@ func (q *fileDBQueue) EnqueueBatch(queue_name, mode string, items []interface{})
 			if err != nil {
 				q.logger.Error("Error enqueuing messages", "error", err)
 				// Mark all messages in this chunk as failed
-				for idx := range chunk {
-					returnFailedMessages = append(returnFailedMessages, internal.FailedMessage{
-						Index:   currentIndex + int64(idx),
-						Message: chunk[idx],
-						Reason:  fmt.Sprintf("enqueue error: %v", err),
-					})
+				for idx := range failedMessages {
+					failedMessages[idx].Index += currentIndex
 				}
+				returnFailedMessages = append(returnFailedMessages, failedMessages...)
 			} else {
 				totalSuccess += successCount
 				returnFailedMessages = append(returnFailedMessages, failedMessages...)
