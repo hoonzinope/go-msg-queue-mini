@@ -129,11 +129,12 @@ func debugMode(wg *sync.WaitGroup, ctx context.Context, client *client.QueueClie
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			producer := runner.Producer{
-				Name:   fmt.Sprintf("producer_%d", i),
+			consumer := runner.Consumer{
+				Name:   fmt.Sprintf("consumer_%d", i),
+				Group:  groupName,
 				Client: client,
 			}
-			producer.Produce(ctx)
+			consumer.Consume(ctx)
 		}(i)
 	}
 
@@ -141,12 +142,11 @@ func debugMode(wg *sync.WaitGroup, ctx context.Context, client *client.QueueClie
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			consumer := runner.Consumer{
-				Name:   fmt.Sprintf("consumer_%d", i),
-				Group:  groupName,
+			producer := runner.Producer{
+				Name:   fmt.Sprintf("producer_%d", i),
 				Client: client,
 			}
-			consumer.Consume(ctx)
+			producer.Produce(ctx)
 		}(i)
 	}
 }

@@ -15,6 +15,7 @@ import (
 type enqueueBatchCall struct {
 	queueName string
 	mode      string
+	delay     string
 	items     []interface{}
 }
 
@@ -29,10 +30,10 @@ func (m *mockQueue) CreateQueue(string) error { return nil }
 
 func (m *mockQueue) DeleteQueue(string) error { return nil }
 
-func (m *mockQueue) Enqueue(string, interface{}) error { return nil }
+func (m *mockQueue) Enqueue(string, interface{}, string) error { return nil }
 
-func (m *mockQueue) EnqueueBatch(queueName, mode string, items []interface{}) (internal.BatchResult, error) {
-	m.enqueueBatchCalls = append(m.enqueueBatchCalls, enqueueBatchCall{queueName: queueName, mode: mode, items: items})
+func (m *mockQueue) EnqueueBatch(queueName, mode, delay string, items []interface{}) (internal.BatchResult, error) {
+	m.enqueueBatchCalls = append(m.enqueueBatchCalls, enqueueBatchCall{queueName: queueName, mode: mode, delay: delay, items: items})
 	if m.enqueueBatchResponse != nil {
 		return *m.enqueueBatchResponse, m.enqueueBatchError
 	}

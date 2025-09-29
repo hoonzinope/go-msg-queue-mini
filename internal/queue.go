@@ -31,8 +31,8 @@ type FailedMessage struct {
 type Queue interface {
 	CreateQueue(queue_name string) error
 	DeleteQueue(queue_name string) error
-	Enqueue(queue_name string, item interface{}) error
-	EnqueueBatch(queue_name, mode string, items []interface{}) (BatchResult, error)
+	Enqueue(queue_name string, item interface{}, delay string) error
+	EnqueueBatch(queue_name, mode, delay string, items []interface{}) (BatchResult, error)
 	Dequeue(queue_name string, group_name string, consumer_id string) (QueueMessage, error)
 	Ack(queue_name string, group_name string, messageID int64, receipt string) error
 	Nack(queue_name string, group_name string, messageID int64, receipt string) error

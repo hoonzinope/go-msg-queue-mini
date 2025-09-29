@@ -99,8 +99,12 @@ func (qs *queueServiceServer) Enqueue(ctx context.Context, req *EnqueueRequest) 
 		qs.Logger.Error("Error enqueuing message", "error", "queue name is required")
 		return nil, fmt.Errorf("queue name is required")
 	}
+	delay := req.GetDelay()
+	if delay == "" {
+		delay = "0s"
+	}
 	message := req.GetMessage()
-	if err := qs.Queue.Enqueue(queue_name, message); err != nil {
+	if err := qs.Queue.Enqueue(queue_name, message, delay); err != nil {
 		qs.Logger.Error("Error enqueuing message", "error", err)
 		return nil, err
 	}
@@ -119,7 +123,10 @@ func (qs *queueServiceServer) EnqueueBatch(ctx context.Context, req *EnqueueBatc
 		qs.Logger.Error("Error enqueuing messages", "error", "invalid mode")
 		return nil, fmt.Errorf("invalid mode")
 	}
-
+	delay := req.GetDelay()
+	if delay == "" {
+		delay = "0s"
+	}
 	messages := req.GetMessages()
 	if len(messages) == 0 {
 		qs.Logger.Error("Error enqueuing messages", "error", "messages are required")
@@ -130,7 +137,7 @@ func (qs *queueServiceServer) EnqueueBatch(ctx context.Context, req *EnqueueBatc
 		msgs[i] = msg
 	}
 
-	batchResult, err := qs.Queue.EnqueueBatch(queue_name, mode, msgs)
+	batchResult, err := qs.Queue.EnqueueBatch(queue_name, mode, delay, msgs)
 	if err != nil {
 		qs.Logger.Error("Error enqueuing messages", "error", err)
 		return nil, err

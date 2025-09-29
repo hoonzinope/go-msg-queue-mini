@@ -67,8 +67,10 @@ func (h *httpServerInstance) enqueueHandler(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request payload"})
 		return
 	}
-
-	err := h.Queue.Enqueue(queue_name, req.Message)
+	if req.Delay == "" {
+		req.Delay = "0s"
+	}
+	err := h.Queue.Enqueue(queue_name, req.Message, req.Delay)
 	if err != nil {
 		h.Logger.Error("Error enqueuing message", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to enqueue message"})
@@ -102,12 +104,17 @@ func (h *httpServerInstance) enqueueBatchHandler(c *gin.Context) {
 		return
 	}
 
+	delay := req.Delay
+	if delay == "" {
+		delay = "0s"
+	}
+
 	msgs := make([]interface{}, len(req.Messages))
 	for i, msg := range req.Messages {
 		msgs[i] = msg
 	}
 
-	batchResult, err := h.Queue.EnqueueBatch(queue_name, mode, msgs)
+	batchResult, err := h.Queue.EnqueueBatch(queue_name, mode, delay, msgs)
 	if err != nil {
 		h.Logger.Error("Error enqueuing messages", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to enqueue messages"})
