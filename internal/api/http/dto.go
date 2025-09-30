@@ -4,6 +4,7 @@ import "encoding/json"
 
 type EnqueueRequest struct {
 	Message json.RawMessage `json:"message" binding:"required"`
+	Delay   string          `json:"delay"` // e.g., "10s", "1m"
 }
 
 type EnqueueResponse struct {
@@ -13,6 +14,7 @@ type EnqueueResponse struct {
 
 type EnqueueBatchRequest struct {
 	Mode     string            `json:"mode" binding:"required,oneof=partialSuccess stopOnFailure"`
+	Delay    string            `json:"delay"` // e.g., "10s", "1m"
 	Messages []json.RawMessage `json:"messages" binding:"required"`
 }
 

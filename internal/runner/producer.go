@@ -29,7 +29,7 @@ func (p *Producer) Produce(ctx context.Context) {
 
 func (p *Producer) produce(item interface{}) {
 	logger := p.Client.Logger
-	err := p.Client.Produce(item)
+	err := p.Client.Produce(item, "3s")
 	if err != nil {
 		logger.Error("Error producing item", slog.String("producer", p.Name), slog.String("error", err.Error()))
 		return

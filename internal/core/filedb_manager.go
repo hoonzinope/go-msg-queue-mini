@@ -215,12 +215,56 @@ func (m *FileDBManager) createQueueTable() error {
 	if err != nil {
 		return err
 	}
+
+	// if not exists visible_at then add column (초기값은 insert_ts)
+	rows, err := m.db.Query(`PRAGMA table_info(queue);`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	var check_visible_at bool
+	for rows.Next() {
+		var cid int
+		var name string
+		var ctype string
+		var notnull int
+		var dflt_value *string
+		var pk int
+
+		err = rows.Scan(&cid, &name, &ctype, &notnull, &dflt_value, &pk)
+		if err != nil {
+			return err
+		}
+
+		if name == "visible_at" {
+			check_visible_at = true
+			break
+		}
+	}
+	if err = rows.Err(); err != nil {
+		return err
+	}
+
+	if !check_visible_at {
+		_, err = m.db.Exec(`ALTER TABLE queue ADD COLUMN visible_at TIMESTAMP;`)
+		if err != nil {
+			return err
+		}
+
+		// 기존 데이터들의 visible_at 값을 insert_ts 값으로 초기화
+		_, err = m.db.Exec(`UPDATE queue SET visible_at = insert_ts WHERE visible_at IS NULL;`)
+		if err != nil {
+			return err
+		}
+	}
+
 	createIndex := `CREATE UNIQUE INDEX IF NOT EXISTS uq_queue_global ON queue(queue_info_id, global_id);`
 	_, err = m.db.Exec(createIndex)
 	if err != nil {
 		return err
 	}
-	createIndex2 := `CREATE INDEX IF NOT EXISTS idx_queue_partition ON queue(queue_info_id, partition_id, id);`
+	createIndex2 := `CREATE INDEX IF NOT EXISTS idx_queue_partition ON queue(queue_info_id, partition_id, visible_at, id);`
 	_, err = m.db.Exec(createIndex2)
 	if err != nil {
 		return err
@@ -407,34 +451,37 @@ func (m *FileDBManager) DeleteQueue(name string) error {
 	return nil
 }
 
-func (m *FileDBManager) WriteMessage(queue_name string, msg []byte) (err error) {
+func (m *FileDBManager) WriteMessage(queue_name string, msg []byte, delay string) (err error) {
 	gid := util.GenerateGlobalID()
 	pid := 0
-	return m.WriteMessageWithMeta(queue_name, msg, gid, pid)
+	return m.writeMessageWithMeta(queue_name, msg, gid, pid, delay)
 }
 
-func (m *FileDBManager) WriteMessageWithMeta(queue_name string, msg []byte, globalID string, partitionID int) (err error) {
+func (m *FileDBManager) writeMessageWithMeta(queue_name string, msg []byte, globalID string, partitionID int, delay string) (err error) {
 	queueInfoID, err := m.getQueueInfoID(queue_name)
 	if queueInfoID < 0 || err != nil {
 		return fmt.Errorf("queue not found: %s", queue_name)
 	}
+	mod, err := m.delayToSeconds(delay) // "+0 seconds"
+	if err != nil {
+		return err
+	}
 	return m.inTx(func(tx *sql.Tx) error {
 		_, err = tx.Exec(`
-		INSERT INTO queue 
-		(queue_info_id, msg, global_id, partition_id) 
-		VALUES (?, ?, ?, ?)`,
-			queueInfoID, msg, globalID, partitionID)
+			INSERT INTO queue 
+			(queue_info_id, msg, global_id, partition_id, visible_at) 
+			VALUES (?, ?, ?, ?, DATETIME('now', ?));`,
+			queueInfoID, msg, globalID, partitionID, mod)
 		return err
 	})
 }
 
-func (m *FileDBManager) WriteMessagesBatch(queue_name string, msgs [][]byte) (int64, error) {
-	pid := 0
-	return m.WriteMessagesBatchWithMeta(queue_name, msgs, pid)
-}
-
-func (m *FileDBManager) WriteMessagesBatchWithMeta(queue_name string, msgs [][]byte, partitionID int) (int64, error) {
+func (m *FileDBManager) WriteMessagesBatchWithMeta(queue_name string, msgs [][]byte, partitionID int, delay string) (int64, error) {
 	queueInfoID, err := m.getQueueInfoID(queue_name)
+	if err != nil {
+		return 0, err
+	}
+	mod, err := m.delayToSeconds(delay) // "+0 seconds"
 	if err != nil {
 		return 0, err
 	}
@@ -442,8 +489,8 @@ func (m *FileDBManager) WriteMessagesBatchWithMeta(queue_name string, msgs [][]b
 		var txCnt int64 = 0
 		stmt, err := tx.Prepare(`
 			INSERT INTO queue 
-			(queue_info_id, msg, global_id, partition_id) 
-			VALUES (?, ?, ?, ?)`)
+			(queue_info_id, msg, global_id, partition_id, visible_at) 
+			VALUES (?, ?, ?, ?, DATETIME('now', ?))`)
 		if err != nil {
 			return txCnt, err
 		}
@@ -451,7 +498,7 @@ func (m *FileDBManager) WriteMessagesBatchWithMeta(queue_name string, msgs [][]b
 
 		for _, msg := range msgs {
 			globalID := util.GenerateGlobalID()
-			_, insertErr := stmt.Exec(queueInfoID, msg, globalID, partitionID)
+			_, insertErr := stmt.Exec(queueInfoID, msg, globalID, partitionID, mod)
 			if insertErr != nil {
 				return txCnt, insertErr
 			}
@@ -465,8 +512,12 @@ func (m *FileDBManager) WriteMessagesBatchWithMeta(queue_name string, msgs [][]b
 	return successCount, nil
 }
 
-func (m *FileDBManager) WriteMessagesBatchWithMetaAndReturnFailed(queue_name string, msgs [][]byte, partitionID int) (int64, []InsertFailedMessage, error) {
+func (m *FileDBManager) WriteMessagesBatchWithMetaAndReturnFailed(queue_name string, msgs [][]byte, partitionID int, delay string) (int64, []InsertFailedMessage, error) {
 	queueInfoID, err := m.getQueueInfoID(queue_name)
+	if err != nil {
+		return 0, nil, err
+	}
+	mod, err := m.delayToSeconds(delay) // "+0 seconds"
 	if err != nil {
 		return 0, nil, err
 	}
@@ -474,8 +525,8 @@ func (m *FileDBManager) WriteMessagesBatchWithMetaAndReturnFailed(queue_name str
 	successCount, err := m.inTxWithCount(func(tx *sql.Tx) (int64, error) {
 		stmt, err := tx.Prepare(`
 			INSERT INTO queue 
-			(queue_info_id, msg, global_id, partition_id) 
-			VALUES (?, ?, ?, ?)
+			(queue_info_id, msg, global_id, partition_id, visible_at) 
+			VALUES (?, ?, ?, ?, DATETIME('now', ?))
 			ON CONFLICT(queue_info_id, global_id) DO NOTHING
 			`)
 		if err != nil {
@@ -491,7 +542,7 @@ func (m *FileDBManager) WriteMessagesBatchWithMetaAndReturnFailed(queue_name str
 			if _, err := tx.Exec(fmt.Sprintf("SAVEPOINT %s;", sp)); err != nil {
 
 			}
-			res, insertErr := stmt.Exec(queueInfoID, msg, globalID, partitionID)
+			res, insertErr := stmt.Exec(queueInfoID, msg, globalID, partitionID, mod)
 			if insertErr != nil {
 				_, _ = tx.Exec(fmt.Sprintf("ROLLBACK TO %s;", sp))
 				_, _ = tx.Exec(fmt.Sprintf("RELEASE %s;", sp))
@@ -559,6 +610,7 @@ func (m *FileDBManager) ReadMessageWithMeta(queue_name, group string, partitionI
 				i.partition_id = ?
 			WHERE
 			q.queue_info_id = ? 
+			AND q.visible_at <= CURRENT_TIMESTAMP
 			AND a.global_id IS NULL
 			AND (i.q_id IS NULL OR i.lease_until <= CURRENT_TIMESTAMP)
 			AND q.partition_id = ?
@@ -571,7 +623,6 @@ func (m *FileDBManager) ReadMessageWithMeta(queue_name, group string, partitionI
 		if err != nil {
 			return queueMsg{}, err
 		}
-
 		// 2) 선점 시도 (UPSERT). leaseSec는 정수(초)
 		res, err := tx.Exec(`
 			INSERT INTO 
@@ -884,6 +935,7 @@ func (m *FileDBManager) PeekMessageWithMeta(queue_name, group string, partitionI
 			qi.id = q.queue_info_id
 		WHERE
 		  q.queue_info_id = ?  
+		  AND q.visible_at <= CURRENT_TIMESTAMP
 		  AND a.global_id IS NULL
 		  AND (i.q_id IS NULL OR i.lease_until <= CURRENT_TIMESTAMP)
 		  AND q.partition_id = ?
@@ -989,4 +1041,20 @@ func (m *FileDBManager) inTxWithQueueMsg(txFunc func(tx *sql.Tx) (queueMsg, erro
 	}()
 	queueMsg, err := txFunc(tx)
 	return queueMsg, err
+}
+
+func (m *FileDBManager) delayToSeconds(delay string) (string, error) {
+	mod := fmt.Sprintf("+%d seconds", 0)
+	if delay == "" {
+		return mod, nil
+	}
+	dur, err := time.ParseDuration(delay)
+	if err != nil {
+		return "", err
+	}
+	sec := int(dur.Round(time.Second).Seconds())
+	if sec < 0 {
+		sec = 0
+	}
+	return fmt.Sprintf("+%d seconds", sec), nil
 }

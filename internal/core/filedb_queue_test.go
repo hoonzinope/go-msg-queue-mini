@@ -51,8 +51,9 @@ func TestFileDBQueueEnqueueBatchSuccess(t *testing.T) {
 	createQueueOrFail(t, queue, queueName)
 
 	mode := "stopOnFailure"
+	delay := "0s"
 	batch := []interface{}{"first", map[string]interface{}{"foo": "bar"}}
-	batchResult, err := queue.EnqueueBatch(queueName, mode, batch)
+	batchResult, err := queue.EnqueueBatch(queueName, mode, delay, batch)
 	if err != nil {
 		t.Fatalf("enqueue batch returned error: %v", err)
 	}
@@ -82,8 +83,9 @@ func TestFileDBQueueEnqueueBatchSuccess(t *testing.T) {
 func TestFileDBQueueEnqueueBatchQueueNotFound(t *testing.T) {
 	queue := newTestQueue(t)
 	mode := "stopOnFailure"
+	delay := "0s"
 	batch := []interface{}{"no-queue"}
-	batchResult, err := queue.EnqueueBatch("missing-queue", mode, batch)
+	batchResult, err := queue.EnqueueBatch("missing-queue", mode, delay, batch)
 	if err == nil {
 		t.Fatal("expected error when enqueueing to missing queue, got nil")
 	}
@@ -102,8 +104,9 @@ func TestFileDBQueueEnqueueBatchStopOnFailureMarshalError(t *testing.T) {
 
 	invalid := make(chan int)
 	batch := []interface{}{"valid", invalid}
+	delay := "0s"
 
-	result, err := queue.EnqueueBatch(queueName, "stopOnFailure", batch)
+	result, err := queue.EnqueueBatch(queueName, "stopOnFailure", delay, batch)
 	if err == nil {
 		t.Fatal("expected marshal error, got nil")
 	}
@@ -135,8 +138,9 @@ func TestFileDBQueueEnqueueBatchPartialSuccessChunkError(t *testing.T) {
 		items[i] = fmt.Sprintf("msg-%03d", i)
 	}
 	items[100] = make(chan int)
+	delay := "0s"
 
-	result, err := queue.EnqueueBatch(queueName, "partialSuccess", items)
+	result, err := queue.EnqueueBatch(queueName, "partialSuccess", delay, items)
 	if err != nil {
 		t.Fatalf("expected nil error, got %v", err)
 	}

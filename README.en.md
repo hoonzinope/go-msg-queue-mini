@@ -9,6 +9,7 @@ A compact yet robust Go-based message queue. It supports Producer/Consumer runti
 - **Pluggable persistence**: `memory` (in-memory SQLite) or `file` (file-backed SQLite)
 - **Concurrency**: Multiple producers/consumers via goroutines
 - **Processing guarantees**: Ack/Nack, inflight, DLQ, retry with backoff + jitter
+- **Delayed delivery**: Schedule visibility via the optional `delay` parameter (e.g., "10s", "5m", "1h30m")
 - **Lease/Renew**: Message lease with `/renew` to extend
 - **Peek**: Inspect next message without claiming via `/peek`
 - **Status**: `/status` returns totals for queue/acked/inflight/dlq
@@ -22,8 +23,9 @@ A compact yet robust Go-based message queue. It supports Producer/Consumer runti
 - Run (debug mode): `go run cmd/main.go` (default `memory` persistence)
 - Health: `curl -s localhost:8080/health`
 - Create queue: `curl -X POST localhost:8080/api/v1/default/create -H 'X-API-Key: $API_KEY'`
-- Enqueue: `curl -X POST localhost:8080/api/v1/default/enqueue -H 'Content-Type: application/json' -H 'X-API-Key: $API_KEY' -d '{"message": {"text":"hello"}}'`
-- Batch enqueue: `curl -X POST localhost:8080/api/v1/default/enqueue/batch -H 'Content-Type: application/json' -H 'X-API-Key: $API_KEY' -d '{"mode":"partialSuccess","messages":[{"text":"hello"},{"text":"world"}]}'`
+- Enqueue: `curl -X POST localhost:8080/api/v1/default/enqueue -H 'Content-Type: application/json' -H 'X-API-Key: $API_KEY' -d '{"message":{"text":"hello"}}'` (defaults to immediate visibility when `delay` is omitted)
+- Delayed enqueue: `curl -X POST localhost:8080/api/v1/default/enqueue -H 'Content-Type: application/json' -H 'X-API-Key: $API_KEY' -d '{"message":{"text":"hello-later"},"delay":"30s"}'`
+- Batch enqueue (apply 1m delay): `curl -X POST localhost:8080/api/v1/default/enqueue/batch -H 'Content-Type: application/json' -H 'X-API-Key: $API_KEY' -d '{"mode":"partialSuccess","messages":[{"text":"hello"},{"text":"world"}],"delay":"1m"}'`
 - Dequeue: `curl -X POST localhost:8080/api/v1/default/dequeue -H 'Content-Type: application/json' -H 'X-API-Key: $API_KEY' -d '{"group":"g1","consumer_id":"c-1"}'`
 
 ## Project Structure
@@ -58,11 +60,12 @@ A compact yet robust Go-based message queue. It supports Producer/Consumer runti
 │   ├── metrics/                 # Prometheus metrics
 │   └── runner/
 │       ├── producer.go          # Debug-mode producer
-│       ├── consumer.go          # Debug-mode consumer
-│       └── stat.go              # Periodic status monitor
+│       └── consumer.go          # Debug-mode consumer
+│       
 └── util/
     ├── randUtil.go              # Random messages/numbers, jitter
     ├── uuid.go                  # Global ID generator
+    ├── partition.go             # List partitioning utility
     └── logger.go                # slog-backed logger initialization
 ```
 
@@ -114,11 +117,14 @@ grpc:
 
 - `debug: true`
   - Internal producers/consumers and a status monitor run locally.
-  - Observe production/consumption/status logs in the console.
+  - Observe production/consumption logs in the console.
+  - Producer: loads random messages (1-5 bytes) every second.
+  - Consumer: 3 goroutines consuming messages in parallel.
+  - (Note) http/gRPC servers do not run.
 
 - `debug: false` + `http.enabled: true`
   - Runs the HTTP API server on `:8080` (or configured port).
-- `grpc.enabled: true`
+- `debug: false` + `grpc.enabled: true`
   - Runs the gRPC server on `:50051` (or configured port).
 
 ## Logging
@@ -140,12 +146,14 @@ grpc:
   - Response: `200 OK`, `{ "status": "deleted" }`
 
 - Enqueue: `POST /api/v1/:queue_name/enqueue` (header: `X-API-Key: <key>` required)
-  - Request: `{ "message": <any JSON> }`
+  - Request: `{ "message": <any JSON>, "delay": "<Go Duration>" }` (omit `delay` for immediate delivery; e.g., "10s", "1m", "1h30m")
   - Example: `curl -X POST localhost:8080/api/v1/default/enqueue -H 'Content-Type: application/json' -H 'X-API-Key: $API_KEY' -d '{"message": {"text":"hello"}}'`
+  - Note: `delay` must be a valid Go duration string; invalid values reject the request and negatives clamp to zero.
 - Enqueue Batch: `POST /api/v1/:queue_name/enqueue/batch` (header: `X-API-Key: <key>` required)
-  - Request: `{ "mode": "partialSuccess"|"stopOnFailure", "messages": [<any JSON>, ...] }`
+  - Request: `{ "mode": "partialSuccess"|"stopOnFailure", "messages": [<any JSON>, ...], "delay": "<Go Duration>" }`
   - Response: `202 Accepted`, `{ "status": "enqueued", "success_count": <int>, "failure_count": <int>, "failed_messages": [{ "index": <int>, "message": "<raw>", "error": "<reason>" }, ...] }`
   - Behavior: `stopOnFailure` stops on the first error and returns a 5xx, while `partialSuccess` enqueues what it can and reports failures via `failed_messages`.
+  - Note: The optional `delay` applies uniformly to every message in the batch, follows Go duration formatting, and negative values clamp to zero.
 
 - Dequeue: `POST /api/v1/:queue_name/dequeue` (requires `X-API-Key`)
   - Request: `{ "group": "g1", "consumer_id": "c-1" }`
@@ -178,10 +186,12 @@ Common: server returns `X-Request-ID` (auto-generated if missing). Bursts may re
 - Health: `queue.v1.QueueService/HealthCheck` → `{ status: "ok" }`.
 - Core RPCs: `CreateQueue`, `DeleteQueue`, `Enqueue`, `EnqueueBatch`, `Dequeue`, `Ack`, `Nack`, `Peek`, `Renew`, `Status` (see `proto/queue.proto`).
 - Message type: gRPC `message` payloads are strings; HTTP accepts arbitrary JSON payloads.
+- `Enqueue`/`EnqueueBatch` accept an optional `delay` (Go duration string) to schedule visibility; omit it for immediate delivery.
 - For `EnqueueBatch`, set `mode` to `stopOnFailure` or `partialSuccess`; responses include `failure_count`/`failed_messages`, and `stopOnFailure` propagates errors as 5xx responses.
 - Example (grpcurl):
   - List services: `grpcurl -plaintext localhost:50051 list`
-  - Batch enqueue: `grpcurl -plaintext -d '{"queue_name":"default","messages":["hello","world"]}' localhost:50051 queue.v1.QueueService/EnqueueBatch`
+  - Delayed enqueue: `grpcurl -plaintext -d '{"queue_name":"default","message":"hello","delay":"45s"}' localhost:50051 queue.v1.QueueService/Enqueue`
+  - Batch enqueue with delay: `grpcurl -plaintext -d '{"queue_name":"default","messages":["hello","world"],"delay":"1m"}' localhost:50051 queue.v1.QueueService/EnqueueBatch`
 
 ## gRPC Interceptors
 - Logging: `LoggerInterceptor` logs method and latency per call.
@@ -204,6 +214,7 @@ Examples (grpcurl)
 - Optionally use `-cover` for coverage
 
 ## Changes Summary
+- Added scheduled delivery: optional `delay` on HTTP/gRPC enqueue paths backed by the file DB `visible_at` column.
 - Added batch enqueue support: HTTP `/enqueue/batch`, gRPC `EnqueueBatch`, and batched writes in the file-backed queue.
 - Switched to structured logging via Go `log/slog` (text in debug mode, JSON otherwise) with shared diagnostic fields.
 - Introduced the gRPC Queue Service and interceptors (logging/error/recovery/API key) and expanded `proto/queue.proto`.
