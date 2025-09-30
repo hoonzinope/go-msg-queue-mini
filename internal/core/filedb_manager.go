@@ -462,20 +462,10 @@ func (m *FileDBManager) writeMessageWithMeta(queue_name string, msg []byte, glob
 	if queueInfoID < 0 || err != nil {
 		return fmt.Errorf("queue not found: %s", queue_name)
 	}
-	// calculate visible_at
-	if delay == "" {
-		delay = "0s"
+	mod, err := m.delayToSeconds(delay) // "+0 seconds"
+	if err != nil {
+		return err
 	}
-	var dur time.Duration
-	if delay != "0s" {
-		dur, err = time.ParseDuration(delay)
-		if err != nil {
-			return err
-		}
-	} else {
-		dur = 0
-	}
-	mod := fmt.Sprintf("+%d seconds", int(dur.Seconds()))
 	return m.inTx(func(tx *sql.Tx) error {
 		_, err = tx.Exec(`
 			INSERT INTO queue 
@@ -486,30 +476,15 @@ func (m *FileDBManager) writeMessageWithMeta(queue_name string, msg []byte, glob
 	})
 }
 
-// func (m *FileDBManager) WriteMessagesBatch(queue_name string, msgs [][]byte) (int64, error) {
-// 	pid := 0
-// 	return m.WriteMessagesBatchWithMeta(queue_name, msgs, pid)
-// }
-
 func (m *FileDBManager) WriteMessagesBatchWithMeta(queue_name string, msgs [][]byte, partitionID int, delay string) (int64, error) {
 	queueInfoID, err := m.getQueueInfoID(queue_name)
 	if err != nil {
 		return 0, err
 	}
-
-	if delay == "" {
-		delay = "0s"
+	mod, err := m.delayToSeconds(delay) // "+0 seconds"
+	if err != nil {
+		return 0, err
 	}
-	var dur time.Duration
-	if delay != "0s" {
-		dur, err = time.ParseDuration(delay)
-		if err != nil {
-			return 0, err
-		}
-	} else {
-		dur = 0
-	}
-	mod := fmt.Sprintf("+%d seconds", int(dur.Seconds()))
 	successCount, err := m.inTxWithCount(func(tx *sql.Tx) (int64, error) {
 		var txCnt int64 = 0
 		stmt, err := tx.Prepare(`
@@ -542,19 +517,10 @@ func (m *FileDBManager) WriteMessagesBatchWithMetaAndReturnFailed(queue_name str
 	if err != nil {
 		return 0, nil, err
 	}
-	if delay == "" {
-		delay = "0s"
+	mod, err := m.delayToSeconds(delay) // "+0 seconds"
+	if err != nil {
+		return 0, nil, err
 	}
-	var dur time.Duration
-	if delay != "0s" {
-		dur, err = time.ParseDuration(delay)
-		if err != nil {
-			return 0, nil, err
-		}
-	} else {
-		dur = 0
-	}
-	mod := fmt.Sprintf("+%d seconds", int(dur.Seconds()))
 	var failedMessages []InsertFailedMessage
 	successCount, err := m.inTxWithCount(func(tx *sql.Tx) (int64, error) {
 		stmt, err := tx.Prepare(`
@@ -1075,4 +1041,20 @@ func (m *FileDBManager) inTxWithQueueMsg(txFunc func(tx *sql.Tx) (queueMsg, erro
 	}()
 	queueMsg, err := txFunc(tx)
 	return queueMsg, err
+}
+
+func (m *FileDBManager) delayToSeconds(delay string) (string, error) {
+	mod := fmt.Sprintf("+%d seconds", 0)
+	if delay == "" {
+		return mod, nil
+	}
+	dur, err := time.ParseDuration(delay)
+	if err != nil {
+		return "", err
+	}
+	sec := int(dur.Round(time.Second).Seconds())
+	if sec < 0 {
+		sec = 0
+	}
+	return fmt.Sprintf("+%d seconds", sec), nil
 }
