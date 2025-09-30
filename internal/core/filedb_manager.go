@@ -247,7 +247,13 @@ func (m *FileDBManager) createQueueTable() error {
 	}
 
 	if !check_visible_at {
-		_, err = m.db.Exec(`ALTER TABLE queue ADD COLUMN visible_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP;`)
+		_, err = m.db.Exec(`ALTER TABLE queue ADD COLUMN visible_at TIMESTAMP;`)
+		if err != nil {
+			return err
+		}
+
+		// 기존 데이터들의 visible_at 값을 insert_ts 값으로 초기화
+		_, err = m.db.Exec(`UPDATE queue SET visible_at = insert_ts WHERE visible_at IS NULL;`)
 		if err != nil {
 			return err
 		}
