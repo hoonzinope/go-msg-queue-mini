@@ -209,13 +209,50 @@ func (m *FileDBManager) createQueueTable() error {
 		partition_id INTEGER NOT NULL DEFAULT 0,		 -- 파티션 ID
 		global_id TEXT NOT NULL DEFAULT '',			 -- 글로벌 ID (복제시 사용, UUID 사용)
     	insert_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-		visible_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, -- 미래에 보이도록 예약
 		FOREIGN KEY (queue_info_id) REFERENCES queue_info(id) ON DELETE CASCADE
 	);`
 	_, err := m.db.Exec(createTableSQL)
 	if err != nil {
 		return err
 	}
+
+	// if not exists visible_at then add column (초기값은 insert_ts)
+	rows, err := m.db.Query(`PRAGMA table_info(queue);`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	var check_visible_at bool
+	for rows.Next() {
+		var cid int
+		var name string
+		var ctype string
+		var notnull int
+		var dflt_value *string
+		var pk int
+
+		err = rows.Scan(&cid, &name, &ctype, &notnull, &dflt_value, &pk)
+		if err != nil {
+			return err
+		}
+
+		if name == "visible_at" {
+			check_visible_at = true
+			break
+		}
+	}
+	if err = rows.Err(); err != nil {
+		return err
+	}
+
+	if !check_visible_at {
+		_, err = m.db.Exec(`ALTER TABLE queue ADD COLUMN visible_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP;`)
+		if err != nil {
+			return err
+		}
+	}
+
 	createIndex := `CREATE UNIQUE INDEX IF NOT EXISTS uq_queue_global ON queue(queue_info_id, global_id);`
 	_, err = m.db.Exec(createIndex)
 	if err != nil {
