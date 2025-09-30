@@ -459,6 +459,12 @@ func (m *FileDBManager) WriteMessagesBatchWithMeta(queue_name string, msgs [][]b
 		if err != nil {
 			return 0, err
 		}
+		if dur.Seconds() < 0 {
+			dur, err = time.ParseDuration("0s")
+			if err != nil {
+				return 0, err
+			}
+		}
 		visible_at = fmt.Sprintf("DATETIME('now', '+%d seconds')", int(dur.Seconds()))
 	}
 	successCount, err := m.inTxWithCount(func(tx *sql.Tx) (int64, error) {
@@ -502,6 +508,12 @@ func (m *FileDBManager) WriteMessagesBatchWithMetaAndReturnFailed(queue_name str
 		dur, err := time.ParseDuration(delay)
 		if err != nil {
 			return 0, nil, err
+		}
+		if dur.Seconds() < 0 {
+			dur, err = time.ParseDuration("0s")
+			if err != nil {
+				return 0, nil, err
+			}
 		}
 		visible_at = fmt.Sprintf("DATETIME('now', '+%d seconds')", int(dur.Seconds()))
 	}
