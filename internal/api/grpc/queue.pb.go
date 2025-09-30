@@ -285,8 +285,8 @@ func (x *DeleteQueueResponse) GetStatus() string {
 type EnqueueRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	QueueName     string                 `protobuf:"bytes,1,opt,name=queue_name,json=queueName,proto3" json:"queue_name,omitempty"`
-	Delay         string                 `protobuf:"bytes,2,opt,name=delay,proto3" json:"delay,omitempty"`
-	Message       string                 `protobuf:"bytes,3,opt,name=message,proto3" json:"message,omitempty"`
+	Message       string                 `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`
+	Delay         string                 `protobuf:"bytes,3,opt,name=delay,proto3" json:"delay,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -328,16 +328,16 @@ func (x *EnqueueRequest) GetQueueName() string {
 	return ""
 }
 
-func (x *EnqueueRequest) GetDelay() string {
+func (x *EnqueueRequest) GetMessage() string {
 	if x != nil {
-		return x.Delay
+		return x.Message
 	}
 	return ""
 }
 
-func (x *EnqueueRequest) GetMessage() string {
+func (x *EnqueueRequest) GetDelay() string {
 	if x != nil {
-		return x.Message
+		return x.Delay
 	}
 	return ""
 }
@@ -408,8 +408,8 @@ type EnqueueBatchRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	QueueName     string                 `protobuf:"bytes,1,opt,name=queue_name,json=queueName,proto3" json:"queue_name,omitempty"`
 	Mode          string                 `protobuf:"bytes,2,opt,name=mode,proto3" json:"mode,omitempty"`
-	Delay         string                 `protobuf:"bytes,3,opt,name=delay,proto3" json:"delay,omitempty"` // e.g., "10s", "5m"
-	Messages      []string               `protobuf:"bytes,4,rep,name=messages,proto3" json:"messages,omitempty"`
+	Messages      []string               `protobuf:"bytes,3,rep,name=messages,proto3" json:"messages,omitempty"`
+	Delay         string                 `protobuf:"bytes,4,opt,name=delay,proto3" json:"delay,omitempty"` // e.g., "10s", "5m"
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -458,18 +458,18 @@ func (x *EnqueueBatchRequest) GetMode() string {
 	return ""
 }
 
-func (x *EnqueueBatchRequest) GetDelay() string {
-	if x != nil {
-		return x.Delay
-	}
-	return ""
-}
-
 func (x *EnqueueBatchRequest) GetMessages() []string {
 	if x != nil {
 		return x.Messages
 	}
 	return nil
+}
+
+func (x *EnqueueBatchRequest) GetDelay() string {
+	if x != nil {
+		return x.Delay
+	}
+	return ""
 }
 
 // EnqueueBatch response
@@ -1432,9 +1432,9 @@ const file_proto_queue_proto_rawDesc = "" +
 	"\x06status\x18\x01 \x01(\tR\x06status\"_\n" +
 	"\x0eEnqueueRequest\x12\x1d\n" +
 	"\n" +
-	"queue_name\x18\x01 \x01(\tR\tqueueName\x12\x14\n" +
-	"\x05delay\x18\x02 \x01(\tR\x05delay\x12\x18\n" +
-	"\amessage\x18\x03 \x01(\tR\amessage\"b\n" +
+	"queue_name\x18\x01 \x01(\tR\tqueueName\x12\x18\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\x12\x14\n" +
+	"\x05delay\x18\x03 \x01(\tR\x05delay\"b\n" +
 	"\x0fEnqueueResponse\x12\x16\n" +
 	"\x06status\x18\x01 \x01(\tR\x06status\x12\x1d\n" +
 	"\n" +
@@ -1443,9 +1443,9 @@ const file_proto_queue_proto_rawDesc = "" +
 	"\x13EnqueueBatchRequest\x12\x1d\n" +
 	"\n" +
 	"queue_name\x18\x01 \x01(\tR\tqueueName\x12\x12\n" +
-	"\x04mode\x18\x02 \x01(\tR\x04mode\x12\x14\n" +
-	"\x05delay\x18\x03 \x01(\tR\x05delay\x12\x1a\n" +
-	"\bmessages\x18\x04 \x03(\tR\bmessages\"\xd9\x01\n" +
+	"\x04mode\x18\x02 \x01(\tR\x04mode\x12\x1a\n" +
+	"\bmessages\x18\x03 \x03(\tR\bmessages\x12\x14\n" +
+	"\x05delay\x18\x04 \x01(\tR\x05delay\"\xd9\x01\n" +
 	"\x14EnqueueBatchResponse\x12\x16\n" +
 	"\x06status\x18\x01 \x01(\tR\x06status\x12\x1d\n" +
 	"\n" +

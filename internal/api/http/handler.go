@@ -67,9 +67,6 @@ func (h *httpServerInstance) enqueueHandler(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request payload"})
 		return
 	}
-	if req.Delay == "" {
-		req.Delay = "0s"
-	}
 	err := h.Queue.Enqueue(queue_name, req.Message, req.Delay)
 	if err != nil {
 		h.Logger.Error("Error enqueuing message", "error", err)
@@ -105,9 +102,6 @@ func (h *httpServerInstance) enqueueBatchHandler(c *gin.Context) {
 	}
 
 	delay := req.Delay
-	if delay == "" {
-		delay = "0s"
-	}
 
 	msgs := make([]interface{}, len(req.Messages))
 	for i, msg := range req.Messages {
