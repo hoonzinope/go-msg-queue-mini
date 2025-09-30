@@ -9,6 +9,7 @@
 - **영속성 선택**: `memory`(in-memory SQLite) 또는 `file`(파일 기반 SQLite)
 - **동시성 처리**: 다수 Producer/Consumer를 고루틴으로 병렬 실행
 - **처리 보장**: Ack/Nack, Inflight, DLQ, 재시도(backoff + jitter)
+- **지연 전송**: `delay` 파라미터로 메시지 가시 시점을 예약 (예: "10s", "5m", "1h30m")
 - **리스/갱신**: 메시지 점유 기간(lease)과 `/renew`를 통한 연장
 - **미리보기/피킹**: 할당 없이 확인하는 `/peek`
 - **상태 확인**: 합계/ACK/Inflight/DLQ를 반환하는 `/status`
@@ -22,8 +23,9 @@
 - 실행(디버그 모드): `go run cmd/main.go` (기본 `memory` 영속성)
 - HTTP 헬스 확인: `curl -s localhost:8080/health`
 - 큐 생성: `curl -X POST localhost:8080/api/v1/default/create -H 'X-API-Key: $API_KEY'`
-- 메시지 Enqueue: `curl -X POST localhost:8080/api/v1/default/enqueue -H 'Content-Type: application/json' -H 'X-API-Key: $API_KEY' -d '{"message": {"text":"hello"}}'`
-- 메시지 Batch Enqueue: `curl -X POST localhost:8080/api/v1/default/enqueue/batch -H 'Content-Type: application/json' -H 'X-API-Key: $API_KEY' -d '{"mode":"partialSuccess","messages":[{"text":"hello"},{"text":"world"}]}'`
+- 메시지 Enqueue: `curl -X POST localhost:8080/api/v1/default/enqueue -H 'Content-Type: application/json' -H 'X-API-Key: $API_KEY' -d '{"message":{"text":"hello"}}'` (`delay`를 생략하면 즉시 가시)
+- 지연 메시지 Enqueue: `curl -X POST localhost:8080/api/v1/default/enqueue -H 'Content-Type: application/json' -H 'X-API-Key: $API_KEY' -d '{"message":{"text":"hello-later"},"delay":"30s"}'`
+- 메시지 Batch Enqueue: `curl -X POST localhost:8080/api/v1/default/enqueue/batch -H 'Content-Type: application/json' -H 'X-API-Key: $API_KEY' -d '{"mode":"partialSuccess","messages":[{"text":"hello"},{"text":"world"}],"delay":"1m"}'`
 - 메시지 Dequeue: `curl -X POST localhost:8080/api/v1/default/dequeue -H 'Content-Type: application/json' -H 'X-API-Key: $API_KEY' -d '{"group":"g1","consumer_id":"c-1"}'`
 
 ## 프로젝트 구조
@@ -58,11 +60,12 @@
 │   ├── metrics/                 # 프로메테우스 메트릭
 │   └── runner/
 │       ├── producer.go          # 디버그 모드용 프로듀서
-│       ├── consumer.go          # 디버그 모드용 컨슈머
-│       └── stat.go              # 주기 상태 모니터
+│       └── consumer.go          # 디버그 모드용 컨슈머
+│       
 └── util/
     ├── randUtil.go              # 랜덤 메시지/수, 지터
     ├── uuid.go                  # 글로벌 ID 생성
+    ├── partition.go             # 리스트 분할 유틸
     └── logger.go                # slog 기반 로거 초기화
 ```
 
@@ -114,11 +117,14 @@ grpc:
 
 - `debug: true`
   - 내부 프로듀서/컨슈머와 상태 모니터가 함께 실행됩니다.
-  - 콘솔에서 생산/소비/상태 로그를 관찰할 수 있습니다.
+  - 콘솔에서 생산/소비 로그를 관찰할 수 있습니다.
+  - 프로듀서: 1초마다 랜덤 메시지(1~5바이트)를 큐에 적재
+  - 컨슈머: 3개의 고루틴이 병렬로 메시지를 소비
+  - (주의) http/gRPC 서버는 기동되지 않습니다.
 
 - `debug: false` + `http.enabled: true`
   - HTTP API 서버가 `:8080` (또는 설정 포트)에서 기동됩니다.
-- `grpc.enabled: true`
+- `debug: false` + `grpc.enabled: true`
   - gRPC 서버가 `:50051` (또는 설정 포트)에서 기동됩니다.
 
 ## 로깅
@@ -140,12 +146,14 @@ grpc:
   - 응답: `200 OK`, `{ "status": "deleted" }`
 
 - Enqueue: `POST /api/v1/:queue_name/enqueue` (헤더: `X-API-Key: <키>` 필요)
-  - 요청: `{ "message": <JSON format> }`
+  - 요청: `{ "message": <JSON format>, "delay": "<Go Duration>" }` (`delay` 생략 시 즉시 처리, 예: "10s", "1m", "1h30m")
   - 예) `curl -X POST localhost:8080/api/v1/default/enqueue -H 'Content-Type: application/json' -H 'X-API-Key: $API_KEY' -d '{"message": {"text":"hello"}}'`
+  - 비고: `delay`는 Go duration 문자열을 사용하며 잘못된 값은 요청을 실패시키고, 음수는 0초로 보정됩니다.
 - Enqueue Batch: `POST /api/v1/:queue_name/enqueue/batch` (헤더: `X-API-Key: <키>` 필요)
-  - 요청: `{ "mode": "partialSuccess"|"stopOnFailure", "messages": [<JSON format>, ...] }`
+  - 요청: `{ "mode": "partialSuccess"|"stopOnFailure", "messages": [<JSON format>, ...], "delay": "<Go Duration>" }`
   - 응답: `202 Accepted`, `{ "status": "enqueued", "success_count": <int>, "failure_count": <int>, "failed_messages": [{ "index": <int>, "message": "<raw>", "error": "<reason>" }, ...] }`
   - 동작: `stopOnFailure`는 첫 오류에서 중단하고 5xx로 실패를 반환하며, `partialSuccess`는 성공한 항목만 적재하고 실패 항목을 `failed_messages`에 포함합니다.
+  - 비고: `delay`를 지정하면 모든 메시지가 동일한 지연 후 가시화되며, 값은 Go duration 문자열을 따르고 음수는 0초로 보정됩니다.
 
 - Dequeue: `POST /api/v1/:queue_name/dequeue` (헤더: `X-API-Key: <키>` 필요)
   - 요청: `{ "group": "g1", "consumer_id": "c-1" }`
@@ -178,8 +186,9 @@ grpc:
 - 헬스체크: `queue.v1.QueueService/HealthCheck` → `{ status: "ok" }`.
 - 주요 RPC: `CreateQueue`, `DeleteQueue`, `Enqueue`, `EnqueueBatch`, `Dequeue`, `Ack`, `Nack`, `Peek`, `Renew`, `Status` (proto: `proto/queue.proto`).
 - 메시지 타입: gRPC `message` 필드는 문자열(string)이며, HTTP는 임의의 JSON을 지원합니다.
+- `Enqueue`/`EnqueueBatch` 요청은 선택적 `delay`(Go duration 문자열)로 메시지 가시 시점을 예약할 수 있으며, 생략 시 즉시 처리됩니다.
 - `EnqueueBatch` 호출 시 `mode`를 `stopOnFailure` 또는 `partialSuccess`로 지정하고, 응답은 `failure_count`/`failed_messages`를 통해 부분 실패를 보고합니다. `stopOnFailure`에서 오류가 발생하면 전체 호출이 실패(5xx)로 끝납니다.
-- 호출 예시(grpcurl): `grpcurl -plaintext localhost:50051 list` / `grpcurl -plaintext -d '{"queue_name":"default","messages":["hi","there"]}' localhost:50051 queue.v1.QueueService/EnqueueBatch`.
+- 호출 예시(grpcurl): `grpcurl -plaintext localhost:50051 list` / `grpcurl -plaintext -d '{"queue_name":"default","message":"hello","delay":"45s"}' localhost:50051 queue.v1.QueueService/Enqueue` / `grpcurl -plaintext -d '{"queue_name":"default","messages":["hi","there"],"delay":"1m"}' localhost:50051 queue.v1.QueueService/EnqueueBatch`.
 
 ## gRPC 인터셉터
 - 로깅: `LoggerInterceptor`가 호출 메서드/소요시간을 기록합니다.
@@ -202,6 +211,7 @@ grpc:
 - 필요 시 `-cover`로 커버리지 확인
 
 ## 변경 사항(요약)
+- 메시지 지연 전송 지원: HTTP/gRPC Enqueue에 `delay`(Go duration) 옵션을 추가하고 파일 DB `visible_at`을 사용해 예약 처리합니다.
 - 배치 Enqueue API 추가: HTTP `/enqueue/batch`, gRPC `EnqueueBatch`, 파일 DB 큐의 일괄 쓰기 (`stopOnFailure`/`partialSuccess`) 지원.
 - `log/slog` 기반 구조화 로깅으로 전환(디버그 텍스트, 서버 모드 JSON) 및 공통 필드 정비.
 - gRPC Queue Service와 인터셉터(로깅/에러/복구/API 키)를 추가하고 `proto/queue.proto`를 확장.
