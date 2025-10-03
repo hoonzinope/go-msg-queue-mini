@@ -1,10 +1,10 @@
 package util
 
-func ChunkSlice(list []any, chunkSize int) [][]any {
+func ChunkSlice[T any](list []T, chunkSize int) [][]T {
 	if chunkSize <= 0 {
-		return [][]any{list}
+		return [][]T{list}
 	}
-	var chunks [][]any
+	var chunks [][]T
 	total := len(list)
 	for i := 0; i < total; i += chunkSize {
 		end := i + chunkSize

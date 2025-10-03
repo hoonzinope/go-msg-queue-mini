@@ -84,14 +84,15 @@ message DeleteQueueResponse {
 message EnqueueRequest {
   string queue_name = 1;
   string message = 2;
-  string delay = 3;
+  string delay = 3; // optional, e.g., "5s","10m"
+  string deduplication_id = 4; // optional
 }
 
 // HTTP: EnqueueResponse{ status, message }
 message EnqueueResponse {
   string status = 1;           // e.g., "enqueued"
   string queue_name = 2;
-  string  message = 3;          // 원본 페이로드 에코백
+  string message = 3;          // 원본 페이로드 에코백
 }
 
 // EnqueueBatch request
@@ -99,7 +100,8 @@ message EnqueueBatchRequest {
   string queue_name = 1;
   string mode = 2;
   repeated string messages = 3;
-  string delay = 4; // e.g., "10s", "5m"
+  string delay = 4; // optional, e.g., "10s", "5m"
+  string deduplication_id = 5; // optional
 }
 
 // EnqueueBatch response

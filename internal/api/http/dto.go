@@ -3,8 +3,9 @@ package http
 import "encoding/json"
 
 type EnqueueRequest struct {
-	Message json.RawMessage `json:"message" binding:"required"`
-	Delay   string          `json:"delay"` // e.g., "10s", "1m"
+	Message         json.RawMessage `json:"message" binding:"required"`
+	Delay           string          `json:"delay"`            // optional, e.g., "10s", "1m"
+	DeduplicationID string          `json:"deduplication_id"` // optional, for FIFO queues
 }
 
 type EnqueueResponse struct {
@@ -13,9 +14,10 @@ type EnqueueResponse struct {
 }
 
 type EnqueueBatchRequest struct {
-	Mode     string            `json:"mode" binding:"required,oneof=partialSuccess stopOnFailure"`
-	Delay    string            `json:"delay"` // e.g., "10s", "1m"
-	Messages []json.RawMessage `json:"messages" binding:"required"`
+	Mode            string            `json:"mode" binding:"required,oneof=partialSuccess stopOnFailure"`
+	Delay           string            `json:"delay"`            // optional, e.g., "10s", "1m"
+	DeduplicationID string            `json:"deduplication_id"` // optional, for FIFO queues
+	Messages        []json.RawMessage `json:"messages" binding:"required"`
 }
 
 type EnqueueBatchResponse struct {

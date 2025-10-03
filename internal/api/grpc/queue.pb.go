@@ -283,12 +283,13 @@ func (x *DeleteQueueResponse) GetStatus() string {
 
 // HTTP: EnqueueRequest{ message json.RawMessage }
 type EnqueueRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	QueueName     string                 `protobuf:"bytes,1,opt,name=queue_name,json=queueName,proto3" json:"queue_name,omitempty"`
-	Message       string                 `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`
-	Delay         string                 `protobuf:"bytes,3,opt,name=delay,proto3" json:"delay,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	QueueName       string                 `protobuf:"bytes,1,opt,name=queue_name,json=queueName,proto3" json:"queue_name,omitempty"`
+	Message         string                 `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`
+	Delay           string                 `protobuf:"bytes,3,opt,name=delay,proto3" json:"delay,omitempty"`                                            // optional, e.g., "5s","10m"
+	DeduplicationId string                 `protobuf:"bytes,4,opt,name=deduplication_id,json=deduplicationId,proto3" json:"deduplication_id,omitempty"` // optional
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *EnqueueRequest) Reset() {
@@ -338,6 +339,13 @@ func (x *EnqueueRequest) GetMessage() string {
 func (x *EnqueueRequest) GetDelay() string {
 	if x != nil {
 		return x.Delay
+	}
+	return ""
+}
+
+func (x *EnqueueRequest) GetDeduplicationId() string {
+	if x != nil {
+		return x.DeduplicationId
 	}
 	return ""
 }
@@ -405,13 +413,14 @@ func (x *EnqueueResponse) GetMessage() string {
 
 // EnqueueBatch request
 type EnqueueBatchRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	QueueName     string                 `protobuf:"bytes,1,opt,name=queue_name,json=queueName,proto3" json:"queue_name,omitempty"`
-	Mode          string                 `protobuf:"bytes,2,opt,name=mode,proto3" json:"mode,omitempty"`
-	Messages      []string               `protobuf:"bytes,3,rep,name=messages,proto3" json:"messages,omitempty"`
-	Delay         string                 `protobuf:"bytes,4,opt,name=delay,proto3" json:"delay,omitempty"` // e.g., "10s", "5m"
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	QueueName       string                 `protobuf:"bytes,1,opt,name=queue_name,json=queueName,proto3" json:"queue_name,omitempty"`
+	Mode            string                 `protobuf:"bytes,2,opt,name=mode,proto3" json:"mode,omitempty"`
+	Messages        []string               `protobuf:"bytes,3,rep,name=messages,proto3" json:"messages,omitempty"`
+	Delay           string                 `protobuf:"bytes,4,opt,name=delay,proto3" json:"delay,omitempty"`                                            // optional, e.g., "10s", "5m"
+	DeduplicationId string                 `protobuf:"bytes,5,opt,name=deduplication_id,json=deduplicationId,proto3" json:"deduplication_id,omitempty"` // optional
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *EnqueueBatchRequest) Reset() {
@@ -468,6 +477,13 @@ func (x *EnqueueBatchRequest) GetMessages() []string {
 func (x *EnqueueBatchRequest) GetDelay() string {
 	if x != nil {
 		return x.Delay
+	}
+	return ""
+}
+
+func (x *EnqueueBatchRequest) GetDeduplicationId() string {
+	if x != nil {
+		return x.DeduplicationId
 	}
 	return ""
 }
@@ -1429,23 +1445,25 @@ const file_proto_queue_proto_rawDesc = "" +
 	"\n" +
 	"queue_name\x18\x01 \x01(\tR\tqueueName\"-\n" +
 	"\x13DeleteQueueResponse\x12\x16\n" +
-	"\x06status\x18\x01 \x01(\tR\x06status\"_\n" +
+	"\x06status\x18\x01 \x01(\tR\x06status\"\x8a\x01\n" +
 	"\x0eEnqueueRequest\x12\x1d\n" +
 	"\n" +
 	"queue_name\x18\x01 \x01(\tR\tqueueName\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage\x12\x14\n" +
-	"\x05delay\x18\x03 \x01(\tR\x05delay\"b\n" +
+	"\x05delay\x18\x03 \x01(\tR\x05delay\x12)\n" +
+	"\x10deduplication_id\x18\x04 \x01(\tR\x0fdeduplicationId\"b\n" +
 	"\x0fEnqueueResponse\x12\x16\n" +
 	"\x06status\x18\x01 \x01(\tR\x06status\x12\x1d\n" +
 	"\n" +
 	"queue_name\x18\x02 \x01(\tR\tqueueName\x12\x18\n" +
-	"\amessage\x18\x03 \x01(\tR\amessage\"z\n" +
+	"\amessage\x18\x03 \x01(\tR\amessage\"\xa5\x01\n" +
 	"\x13EnqueueBatchRequest\x12\x1d\n" +
 	"\n" +
 	"queue_name\x18\x01 \x01(\tR\tqueueName\x12\x12\n" +
 	"\x04mode\x18\x02 \x01(\tR\x04mode\x12\x1a\n" +
 	"\bmessages\x18\x03 \x03(\tR\bmessages\x12\x14\n" +
-	"\x05delay\x18\x04 \x01(\tR\x05delay\"\xd9\x01\n" +
+	"\x05delay\x18\x04 \x01(\tR\x05delay\x12)\n" +
+	"\x10deduplication_id\x18\x05 \x01(\tR\x0fdeduplicationId\"\xd9\x01\n" +
 	"\x14EnqueueBatchResponse\x12\x16\n" +
 	"\x06status\x18\x01 \x01(\tR\x06status\x12\x1d\n" +
 	"\n" +

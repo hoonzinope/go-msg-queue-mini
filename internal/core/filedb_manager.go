@@ -34,12 +34,6 @@ type queueMsg struct {
 	PartitionID int    // 복제시 파티션 식별용
 }
 
-type InsertFailedMessage struct {
-	Index   int64
-	Reason  string
-	Message []byte
-}
-
 var OneDayInSeconds = 24 * 60 * 60 // 24 hours
 
 func NewFileDBManager(dsn string, queueType string, logger *slog.Logger) (*FileDBManager, error) {
@@ -78,78 +72,15 @@ func (m *FileDBManager) intervalJob() error {
 		select {
 		case <-timer.C:
 			// fmt.Println("@@@ Running periodic cleanup tasks...")
-			// 1. queue 테이블에서 오래된 항목 삭제
-			deleteMsgCnt, err := m.deleteQueueMsg()
-			if err != nil {
-				m.logger.Warn("Error deleting queue messages", "error", err)
-			}
-			// 2. acked 테이블에서 오래된 항목 삭제
-			deleteAckedCnt, err := m.deleteAckedMsg()
-			if err != nil {
-				m.logger.Warn("Error deleting acked messages", "error", err)
-			}
-			// 3. 실제로 지워진 데이터가 있을 경우, vacuum -> db 파일 크기 줄이기
-			if (deleteAckedCnt + deleteMsgCnt) > 0 {
-				if err := m.vacuum(); err != nil {
-					m.logger.Warn("Error during vacuum", "error", err)
-				}
+			deleteErr := m.deleteInterval()
+			if deleteErr != nil {
+				m.logger.Warn("Error during periodic cleanup", "error", deleteErr)
 			}
 		case <-m.stopChan:
 			// fmt.Println("@@@ Stopping periodic cleanup tasks...")
 			return nil
 		}
 	}
-}
-
-func (m *FileDBManager) deleteQueueMsg() (int64, error) {
-	return m.inTxWithCount(func(tx *sql.Tx) (int64, error) {
-		res, err := tx.Exec(`
-			DELETE FROM queue
-			WHERE id IN (
-				SELECT q.id
-				FROM queue q
-					JOIN queue_info qi 
-						ON qi.id = q.queue_info_id
-					LEFT JOIN inflight i
-						ON i.queue_info_id = q.queue_info_id
-						AND i.q_id         = q.id
-				WHERE 
-					i.q_id IS NULL
-					AND q.insert_ts <= DATETIME('now', printf('-%d seconds', qi.retention_s))
-			);
-		`)
-		if err != nil {
-			return 0, err
-		}
-		resAffected, err := res.RowsAffected()
-		return resAffected, err
-	})
-}
-
-func (m *FileDBManager) deleteAckedMsg() (int64, error) {
-	return m.inTxWithCount(func(tx *sql.Tx) (int64, error) {
-		res, err := tx.Exec(`
-			DELETE FROM acked
-			WHERE (queue_info_id, acked_at) IN (
-				SELECT qi.id, a.acked_at
-				FROM acked a
-					JOIN queue_info qi 
-						ON qi.id = a.queue_info_id
-				WHERE a.acked_at <= DATETIME('now', printf('-%d seconds', qi.retention_s))
-		);`)
-		if err != nil {
-			return 0, err
-		}
-		resAffected, err := res.RowsAffected()
-		return resAffected, err
-	})
-}
-
-func (m *FileDBManager) vacuum() error {
-	if _, err := m.db.Exec(`PRAGMA incremental_vacuum(1);`); err != nil {
-		return err
-	}
-	return nil
 }
 
 func (m *FileDBManager) Close() error {
@@ -180,331 +111,79 @@ func (m *FileDBManager) initDB() error {
 	if err := m.createDLQTable(); err != nil {
 		return err
 	}
+	if err := m.createDeduplicationLogTable(); err != nil {
+		return err
+	}
 	return nil
 }
 
-// create queue info table
-func (m *FileDBManager) createQueueInfoTable() error {
-	createTableSQL :=
-		`CREATE TABLE IF NOT EXISTS queue_info (
-		id INTEGER PRIMARY KEY,                          -- rowid 기반 고유 PK
-		name TEXT NOT NULL UNIQUE,                        -- 큐 이름
-		retention_s  INTEGER NOT NULL DEFAULT 86400,  -- 메시지 보관기간(초) 정책
-		max_delivery INTEGER NOT NULL DEFAULT 10,     -- 기본 최대 재시도
-		backoff_base INTEGER NOT NULL DEFAULT 1,      -- 기본 백오프 초
-		partition_n  INTEGER NOT NULL DEFAULT 1,      -- 파티션 개수(미래 대비)
-		created_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-	);`
-	_, err := m.db.Exec(createTableSQL)
-	return err
-}
-
-// create queue msg table
-func (m *FileDBManager) createQueueTable() error {
-	createTableSQL :=
-		`CREATE TABLE IF NOT EXISTS queue (
-		id INTEGER PRIMARY KEY,                          -- rowid 기반 고유 PK
-		queue_info_id INTEGER NOT NULL,                  -- 큐 정보 ID
-    	msg BLOB NOT NULL,                               -- 메시지 본문
-		partition_id INTEGER NOT NULL DEFAULT 0,		 -- 파티션 ID
-		global_id TEXT NOT NULL DEFAULT '',			 -- 글로벌 ID (복제시 사용, UUID 사용)
-    	insert_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-		FOREIGN KEY (queue_info_id) REFERENCES queue_info(id) ON DELETE CASCADE
-	);`
-	_, err := m.db.Exec(createTableSQL)
-	if err != nil {
-		return err
-	}
-
-	// if not exists visible_at then add column (초기값은 insert_ts)
-	rows, err := m.db.Query(`PRAGMA table_info(queue);`)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-
-	var check_visible_at bool
-	for rows.Next() {
-		var cid int
-		var name string
-		var ctype string
-		var notnull int
-		var dflt_value *string
-		var pk int
-
-		err = rows.Scan(&cid, &name, &ctype, &notnull, &dflt_value, &pk)
-		if err != nil {
-			return err
+func (m *FileDBManager) deleteInterval() error {
+	return m.inTx(func(tx *sql.Tx) error {
+		deleteCnt, deleteQueueErr := m.deleteQueueMsg(tx)
+		if deleteQueueErr != nil {
+			return deleteQueueErr
 		}
-
-		if name == "visible_at" {
-			check_visible_at = true
-			break
+		ackedCnt, deleteAckedErr := m.deleteAckedMsg(tx)
+		if deleteAckedErr != nil {
+			return deleteAckedErr
 		}
-	}
-	if err = rows.Err(); err != nil {
-		return err
-	}
-
-	if !check_visible_at {
-		_, err = m.db.Exec(`ALTER TABLE queue ADD COLUMN visible_at TIMESTAMP;`)
-		if err != nil {
-			return err
+		if deleteCnt > 0 || ackedCnt > 0 {
+			if _, err := tx.Exec(`PRAGMA incremental_vacuum(1);`); err != nil {
+				return err
+			}
 		}
-
-		// 기존 데이터들의 visible_at 값을 insert_ts 값으로 초기화
-		_, err = m.db.Exec(`UPDATE queue SET visible_at = insert_ts WHERE visible_at IS NULL;`)
-		if err != nil {
-			return err
-		}
-	}
-
-	createIndex := `CREATE UNIQUE INDEX IF NOT EXISTS uq_queue_global ON queue(queue_info_id, global_id);`
-	_, err = m.db.Exec(createIndex)
-	if err != nil {
-		return err
-	}
-	createIndex2 := `CREATE INDEX IF NOT EXISTS idx_queue_partition ON queue(queue_info_id, partition_id, visible_at, id);`
-	_, err = m.db.Exec(createIndex2)
-	if err != nil {
-		return err
-	}
-	return nil
+		return nil
+	})
 }
 
-// create inflight table
-func (m *FileDBManager) createInflightTable() error {
-	createTableSQL :=
-		`CREATE TABLE IF NOT EXISTS inflight (
-		q_id           INTEGER NOT NULL,
-		queue_info_id  INTEGER NOT NULL,                  -- 큐 정보 ID
-		group_name     TEXT    NOT NULL,
-		consumer_id    TEXT    NOT NULL, -- 추가!
-		lease_until    TIMESTAMP NOT NULL,
-		delivery_count INTEGER NOT NULL DEFAULT 1,
-		receipt        TEXT,
-		last_error     TEXT,
-		claimed_at     TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-		partition_id INTEGER NOT NULL DEFAULT 0,		 -- 파티션 ID
-		global_id TEXT NOT NULL DEFAULT '',			 -- 글로벌 ID (복제시 사용, UUID 사용)
-		PRIMARY KEY (queue_info_id, group_name, partition_id, q_id),
-		FOREIGN KEY (q_id) REFERENCES queue(id) ON DELETE CASCADE,
-		FOREIGN KEY (queue_info_id) REFERENCES queue_info(id) ON DELETE CASCADE
-	);`
-	_, err := m.db.Exec(createTableSQL)
-	if err != nil {
-		return err
-	}
-	createIndex := `CREATE INDEX IF NOT EXISTS idx_inflight_lease 
-					ON inflight(queue_info_id, group_name, partition_id, lease_until);`
-	_, err = m.db.Exec(createIndex)
-	if err != nil {
-		return err
-	}
-	createIndex2 := `CREATE UNIQUE INDEX IF NOT EXISTS idx_inflight_receipt 
-					ON inflight(receipt);`
-	_, err = m.db.Exec(createIndex2)
-	if err != nil {
-		return err
-	}
-	// 글로벌 ID + 파티션 ID + 큐 정보 ID + receipt으로도 조회 가능해야 함
-	_, err = m.db.Exec(`
-	CREATE INDEX IF NOT EXISTS idx_inflight_global_receipt
-	ON inflight(queue_info_id, global_id, partition_id, receipt);
-	`)
-	if err != nil {
-		return err
-	}
-	// 글로벌 ID + 파티션 ID + 큐 정보 ID + 그룹명으로도 조회 가능해야 함
-	_, err = m.db.Exec(`
-	CREATE INDEX IF NOT EXISTS idx_inflight_global_group
-	ON inflight(queue_info_id, global_id, partition_id, group_name);
-	`)
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-// create acked table
-func (m *FileDBManager) createAckedTable() error {
-	createTableSQL :=
-		`CREATE TABLE IF NOT EXISTS acked (
-		queue_info_id INTEGER NOT NULL,                  -- 큐 정보 ID
-		group_name  TEXT NOT NULL,                       -- 컨슈머 그룹
-		partition_id INTEGER NOT NULL DEFAULT 0,		 -- 파티션 ID
-		global_id TEXT NOT NULL DEFAULT '',			 -- 글로벌 ID (복제시 사용, UUID 사용)
-		acked_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-		PRIMARY KEY (queue_info_id, group_name, partition_id, global_id),                   -- 큐별, 그룹별 메시지 1개만 점유 가능
-		FOREIGN KEY (queue_info_id) REFERENCES queue_info(id) ON DELETE CASCADE
-	);`
-	_, err := m.db.Exec(createTableSQL)
-	if err != nil {
-		return err
-	}
-	createIndex := `CREATE INDEX IF NOT EXISTS idx_acked_lookup
-  					ON acked(queue_info_id, global_id, partition_id, group_name);`
-	_, err = m.db.Exec(createIndex)
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-// create dlq table
-func (m *FileDBManager) createDLQTable() error {
-	createTableSQL :=
-		`CREATE TABLE IF NOT EXISTS dlq (
-		id INTEGER PRIMARY KEY,                          -- rowid 기반 PK
-		queue_info_id INTEGER NOT NULL,                  -- 큐 정보 ID
-    	q_id INTEGER NOT NULL,                           -- 원본 queue.id
-		partition_id INTEGER NOT NULL DEFAULT 0,		 -- 파티션 ID
-		global_id TEXT NOT NULL DEFAULT '',			 -- 글로벌 ID (복제시 사용, UUID 사용)
-    	msg BLOB,                                        -- 메시지 복사본
-    	failed_group TEXT,                               -- 실패한 컨슈머 그룹
-    	reason TEXT,                                     -- 실패 사유
-    	insert_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, -- 그룹별 메시지 1개만 점유 가능
-		FOREIGN KEY (queue_info_id) REFERENCES queue_info(id) ON DELETE CASCADE,
-		FOREIGN KEY (q_id) REFERENCES queue(id) ON DELETE CASCADE
-	);`
-	_, err := m.db.Exec(createTableSQL)
-	return err
-}
-
-func (m *FileDBManager) getQueueInfoID(name string) (int64, error) {
-	var id int64
-	if v, ok := m.queueNameMap.Load(name); ok {
-		return v.(int64), nil
-	}
-	err := m.db.QueryRow(`SELECT id FROM queue_info WHERE name = ?`, name).Scan(&id)
-	if err == sql.ErrNoRows {
-		return -1, fmt.Errorf("queue not found: %s", name)
-	}
-	if err != nil {
-		return -1, err
-	}
-	m.queueNameMap.Store(name, id)
-	return id, nil
-}
-
-func (m *FileDBManager) ListQueues() ([]string, error) {
-	rows, err := m.db.Query(`SELECT name FROM queue_info ORDER BY name ASC`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var queues []string
-	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			return nil, err
-		}
-		queues = append(queues, name)
-	}
-	return queues, nil
-}
-
-func (m *FileDBManager) CreateQueue(name string) error {
-	defaultRetention := OneDayInSeconds
-	defaultMaxDelivery := 10
-	defaultBackoffBase := 1
-	defaultPartitionN := 1
-	return m.createQueue(name, defaultRetention, defaultMaxDelivery, defaultBackoffBase, defaultPartitionN)
-}
-
-func (m *FileDBManager) createQueue(name string, retentionSec, maxDelivery, backoffBase, partitionN int) error {
-
-	if name == "" {
-		return fmt.Errorf("queue name is required")
-	}
-	// 중복 검사
-	if _, err := m.getQueueInfoID(name); err == nil {
-		return nil // 이미 존재하면 그냥 통과
-	}
-
-	row, err := m.db.Exec(`
-		INSERT INTO queue_info (name, retention_s, max_delivery, backoff_base, partition_n)
-		VALUES (?, ?, ?, ?, ?)`, name, retentionSec, maxDelivery, backoffBase, partitionN)
-	if err != nil {
-		return err
-	}
-	rowID, err := row.LastInsertId()
-	if err != nil {
-		return err
-	}
-	m.queueNameMap.Store(name, rowID)
-	return nil
-}
-
-func (m *FileDBManager) DeleteQueue(name string) error {
-	// 존재하는지 확인
-	if _, err := m.getQueueInfoID(name); err != nil {
-		return err
-	}
-
-	_, err := m.db.Exec(`DELETE FROM queue_info WHERE name = ?`, name)
-	if err != nil {
-		return err
-	}
-	m.queueNameMap.Delete(name)
-	return nil
-}
-
-func (m *FileDBManager) WriteMessage(queue_name string, msg []byte, delay string) (err error) {
-	gid := util.GenerateGlobalID()
-	pid := 0
-	return m.writeMessageWithMeta(queue_name, msg, gid, pid, delay)
-}
-
-func (m *FileDBManager) writeMessageWithMeta(queue_name string, msg []byte, globalID string, partitionID int, delay string) (err error) {
+func (m *FileDBManager) WriteMessage(
+	queue_name string, msg []byte, globalID string, partitionID int, delay string, deduplicationID string) (err error) {
 	queueInfoID, err := m.getQueueInfoID(queue_name)
 	if queueInfoID < 0 || err != nil {
 		return fmt.Errorf("queue not found: %s", queue_name)
 	}
-	mod, err := m.delayToSeconds(delay) // "+0 seconds"
+	mod, err := util.DelayToSeconds(delay) // "+0 seconds"
 	if err != nil {
 		return err
 	}
 	return m.inTx(func(tx *sql.Tx) error {
-		_, err = tx.Exec(`
-			INSERT INTO queue 
-			(queue_info_id, msg, global_id, partition_id, visible_at) 
-			VALUES (?, ?, ?, ?, DATETIME('now', ?));`,
-			queueInfoID, msg, globalID, partitionID, mod)
-		return err
+		// deduplicationID가 있으면 중복 검사
+		if deduplicationID != "" {
+			logId, err := m.checkDuplicationID(tx, queueInfoID, deduplicationID)
+			if err != nil {
+				return fmt.Errorf("error checking duplication ID: %w", err)
+			}
+			// 메시지 삽입
+			queueRowId, err := m.insertMessage(tx, queueInfoID, msg, globalID, partitionID, mod)
+			if err != nil || queueRowId <= 0 {
+				return fmt.Errorf("error inserting message: %w", err)
+			}
+			// log_id, queue_row_id 업데이트
+			if err := m.updateDeduplicationLogWithQueueRowID(tx, logId, queueRowId); err != nil {
+				return fmt.Errorf("error updating deduplication log with queue row ID: %w", err)
+			}
+			return nil
+		} else {
+			// 메시지 삽입
+			queueRowId, err := m.insertMessage(tx, queueInfoID, msg, globalID, partitionID, mod)
+			if err != nil || queueRowId <= 0 {
+				return fmt.Errorf("error inserting message: %w", err)
+			}
+			return nil
+		}
 	})
 }
 
-func (m *FileDBManager) WriteMessagesBatchWithMeta(queue_name string, msgs [][]byte, partitionID int, delay string) (int64, error) {
+func (m *FileDBManager) WriteMessagesBatchWithMeta(
+	queue_name string, msgs [][]byte, partitionID int, delays []string, deduplicationIDs []string) (int64, error) {
 	queueInfoID, err := m.getQueueInfoID(queue_name)
 	if err != nil {
 		return 0, err
 	}
-	mod, err := m.delayToSeconds(delay) // "+0 seconds"
-	if err != nil {
-		return 0, err
-	}
-	successCount, err := m.inTxWithCount(func(tx *sql.Tx) (int64, error) {
-		var txCnt int64 = 0
-		stmt, err := tx.Prepare(`
-			INSERT INTO queue 
-			(queue_info_id, msg, global_id, partition_id, visible_at) 
-			VALUES (?, ?, ?, ?, DATETIME('now', ?))`)
-		if err != nil {
-			return txCnt, err
-		}
-		defer stmt.Close()
 
-		for _, msg := range msgs {
-			globalID := util.GenerateGlobalID()
-			_, insertErr := stmt.Exec(queueInfoID, msg, globalID, partitionID, mod)
-			if insertErr != nil {
-				return txCnt, insertErr
-			}
-			txCnt++
-		}
-		return txCnt, nil
+	successCount, err := m.inTxWithCount(func(tx *sql.Tx) (int64, error) {
+		successCount, err := m.insertMessageBatchStopOnFailure(tx, queueInfoID, msgs, partitionID, delays, deduplicationIDs)
+		return successCount, err
 	})
 	if err != nil {
 		return 0, err
@@ -512,80 +191,32 @@ func (m *FileDBManager) WriteMessagesBatchWithMeta(queue_name string, msgs [][]b
 	return successCount, nil
 }
 
-func (m *FileDBManager) WriteMessagesBatchWithMetaAndReturnFailed(queue_name string, msgs [][]byte, partitionID int, delay string) (int64, []InsertFailedMessage, error) {
+func (m *FileDBManager) WriteMessagesBatchWithMetaAndReturnFailed(
+	queue_name string, msgs [][]byte, partitionID int,
+	delays []string, deduplicationIDs []string) (int64, []internal.FailedMessage, error) {
 	queueInfoID, err := m.getQueueInfoID(queue_name)
 	if err != nil {
 		return 0, nil, err
 	}
-	mod, err := m.delayToSeconds(delay) // "+0 seconds"
-	if err != nil {
-		return 0, nil, err
-	}
-	var failedMessages []InsertFailedMessage
+	var failedMessages []internal.FailedMessage
 	successCount, err := m.inTxWithCount(func(tx *sql.Tx) (int64, error) {
-		stmt, err := tx.Prepare(`
-			INSERT INTO queue 
-			(queue_info_id, msg, global_id, partition_id, visible_at) 
-			VALUES (?, ?, ?, ?, DATETIME('now', ?))
-			ON CONFLICT(queue_info_id, global_id) DO NOTHING
-			`)
+		cnt, failedMessages, err := m.insertMessageBatchReturnFailed(tx, queueInfoID, msgs, partitionID, delays, deduplicationIDs, 0)
+		for _, fm := range failedMessages {
+			failedMessages = append(failedMessages, internal.FailedMessage{
+				Index:   fm.Index,
+				Reason:  fm.Reason,
+				Message: fm.Message,
+			})
+		}
 		if err != nil {
 			return 0, err
 		}
-		defer stmt.Close()
-
-		var txCnt int64 = 0
-		for i, msg := range msgs {
-			globalID := util.GenerateGlobalID()
-			// msg 단위 savepoint
-			sp := fmt.Sprintf("sp_%d", i)
-			if _, err := tx.Exec(fmt.Sprintf("SAVEPOINT %s;", sp)); err != nil {
-
-			}
-			res, insertErr := stmt.Exec(queueInfoID, msg, globalID, partitionID, mod)
-			if insertErr != nil {
-				_, _ = tx.Exec(fmt.Sprintf("ROLLBACK TO %s;", sp))
-				_, _ = tx.Exec(fmt.Sprintf("RELEASE %s;", sp))
-				failedMessages = append(failedMessages, InsertFailedMessage{
-					Index:   int64(i),
-					Reason:  insertErr.Error(),
-					Message: msg,
-				})
-				continue
-			}
-
-			if ra, _ := res.RowsAffected(); ra == 0 {
-				// 중복으로 삽입 안된 경우
-				_, _ = tx.Exec(fmt.Sprintf("ROLLBACK TO %s;", sp))
-				_, _ = tx.Exec(fmt.Sprintf("RELEASE %s;", sp))
-				failedMessages = append(failedMessages, InsertFailedMessage{
-					Index:   int64(i),
-					Reason:  "duplicate message",
-					Message: msg,
-				})
-				continue
-			}
-
-			if _, err := tx.Exec(fmt.Sprintf("RELEASE %s;", sp)); err != nil {
-				_, _ = tx.Exec(fmt.Sprintf("ROLLBACK TO %s;", sp))
-			}
-			txCnt++
-		}
-		if txCnt > 0 {
-			return txCnt, nil
-		} else {
-			return 0, fmt.Errorf("all messages failed to insert")
-		}
+		return cnt, nil
 	})
 	return successCount, failedMessages, err
 }
 
-func (m *FileDBManager) ReadMessage(queue_name, group, consumerID string, leaseSec int) (_ queueMsg, err error) {
-	partitionID := 0
-	return m.ReadMessageWithMeta(queue_name, group, partitionID, consumerID, leaseSec)
-}
-
-func (m *FileDBManager) ReadMessageWithMeta(queue_name, group string, partitionID int, consumerID string, leaseSec int) (_ queueMsg, err error) {
+func (m *FileDBManager) ReadMessage(queue_name, group string, partitionID int, consumerID string, leaseSec int) (_ queueMsg, err error) {
 	queueInfoID, err := m.getQueueInfoID(queue_name)
 	if queueInfoID < 0 || err != nil {
 		return queueMsg{}, fmt.Errorf("queue not found: %s", queue_name)
@@ -593,133 +224,51 @@ func (m *FileDBManager) ReadMessageWithMeta(queue_name, group string, partitionI
 	// 트랜잭션 시작
 	return m.inTxWithQueueMsg(func(tx *sql.Tx) (queueMsg, error) {
 		// 1) 후보 조회
-		var candID int64
-		var globalID string
-		err = tx.QueryRow(`
-			SELECT q.id, q.global_id
-			FROM queue q
-			LEFT JOIN acked a   ON 
-				a.queue_info_id = q.queue_info_id AND 
-				a.global_id = q.global_id AND 
-				a.group_name = ? AND 
-				a.partition_id = ?
-			LEFT JOIN inflight i ON
-				i.queue_info_id = q.queue_info_id AND 
-				i.q_id = q.id AND 
-				i.group_name = ? AND 
-				i.partition_id = ?
-			WHERE
-			q.queue_info_id = ? 
-			AND q.visible_at <= CURRENT_TIMESTAMP
-			AND a.global_id IS NULL
-			AND (i.q_id IS NULL OR i.lease_until <= CURRENT_TIMESTAMP)
-			AND q.partition_id = ?
-			ORDER BY q.id ASC
-			LIMIT 1
-		`, group, partitionID, group, partitionID, queueInfoID, partitionID).Scan(&candID, &globalID)
-		if err == sql.ErrNoRows {
-			return queueMsg{}, queue_error.ErrEmpty
+		candidateMsg, selectCandidateErr := m.getCandidateQueueMsg(tx, queueInfoID, group, partitionID)
+		if selectCandidateErr != nil {
+			return queueMsg{}, selectCandidateErr
 		}
-		if err != nil {
-			return queueMsg{}, err
+		if candidateMsg.ID < 0 || candidateMsg.GlobalID == "" {
+			return queueMsg{}, queue_error.ErrNoMessage
 		}
+
 		// 2) 선점 시도 (UPSERT). leaseSec는 정수(초)
-		res, err := tx.Exec(`
-			INSERT INTO 
-				inflight(
-					q_id, queue_info_id, group_name, consumer_id, lease_until, 
-					delivery_count, claimed_at, receipt, partition_id, 
-					global_id)
-			SELECT ?, ?, ?, ?, DATETIME('now', ? || ' seconds'),
-				COALESCE(
-				(SELECT delivery_count FROM inflight 
-				WHERE queue_info_id = ? AND group_name=? AND partition_id=? AND q_id=?),0)+1,
-				CURRENT_TIMESTAMP,
-				lower(hex(randomblob(16))) AS receipt,
-				?, ?
-			WHERE NOT EXISTS (
-				SELECT 1 FROM inflight
-				WHERE queue_info_id = ? AND group_name=? AND partition_id=? AND q_id=? AND lease_until > CURRENT_TIMESTAMP
-			)
-			ON CONFLICT(queue_info_id, group_name, partition_id, q_id) DO UPDATE SET
-			consumer_id    = excluded.consumer_id,
-			lease_until    = excluded.lease_until,
-			delivery_count = inflight.delivery_count + 1,
-			claimed_at     = CURRENT_TIMESTAMP,
-			receipt        = excluded.receipt
-			WHERE inflight.lease_until <= CURRENT_TIMESTAMP
-		`, candID, queueInfoID, group, consumerID, leaseSec,
-			queueInfoID, group, partitionID, candID,
-			partitionID, globalID,
-			queueInfoID, group, partitionID, candID)
+		err = m.upsertInflight(tx, queueInfoID, group, consumerID, leaseSec, candidateMsg.ID, partitionID, candidateMsg.GlobalID)
 		if err != nil {
 			return queueMsg{}, err
-		}
-		n, _ := res.RowsAffected()
-		if n == 0 {
-			// 경합으로 못 집었음 → 상위 레벨에서 재호출(또는 이 함수 내부에서 짧은 루프)
-			return queueMsg{}, queue_error.ErrContended
 		}
 		// 3) 내가 점유한 메시지 반환 (consumer_id로 한정)
 		var msg queueMsg
-		msg.QueueName = queue_name
-		err = tx.QueryRow(`
-			SELECT 
-			q.id, q.msg, q.insert_ts, i.receipt, q.global_id, q.partition_id
-			FROM queue q
-			JOIN inflight i ON 
-				i.q_id = q.id AND
-				i.queue_info_id = q.queue_info_id
-			JOIN queue_info qi ON
-				qi.id = q.queue_info_id
-			WHERE 
-				i.queue_info_id = ? 
-				AND i.group_name = ? 
-				AND i.consumer_id = ? 
-				AND i.partition_id = ?
-			ORDER BY i.claimed_at DESC
-			LIMIT 1
-		`, queueInfoID, group, consumerID, partitionID).Scan(
-			&msg.ID, &msg.Msg, &msg.InsertTS, &msg.Receipt, &msg.GlobalID, &msg.PartitionID)
+		msg, err := m.getLeaseMsg(tx, queueInfoID, group, consumerID, partitionID)
 		if err != nil {
 			return queueMsg{}, err
 		}
+		msg.QueueName = queue_name
 		return msg, nil
 	})
 }
 
 func (m *FileDBManager) AckMessage(queue_name, group string, msgID int64, receipt string) (err error) {
-	var globalID string
-	var partitionID int
-	err = m.db.QueryRow(`SELECT global_id, partition_id FROM queue WHERE id = ?`, msgID).Scan(&globalID, &partitionID)
-	if err != nil {
-		return err
-	}
-	return m.AckMessageWithMeta(queue_name, group, partitionID, globalID, receipt)
-}
-
-func (m *FileDBManager) AckMessageWithMeta(queue_name, group string, partitionID int, globalID, receipt string) (err error) {
 	queueInfoID, err := m.getQueueInfoID(queue_name)
 	if queueInfoID < 0 || err != nil {
 		return fmt.Errorf("queue not found: %s", queue_name)
 	}
 
 	return m.inTx(func(tx *sql.Tx) error {
-		if _, err = tx.Exec(`
-			DELETE FROM inflight WHERE 
-				queue_info_id = ? AND 
-				global_id = ? AND 
-				partition_id = ? AND 
-				group_name = ? AND 
-				receipt = ?`, queueInfoID, globalID, partitionID, group, receipt); err != nil {
-			return err
+		// msgID -> globalID, partitionID 조회
+		globalID, partitionID, checkErr := m.existsMsgID(tx, msgID)
+		if checkErr != nil {
+			return checkErr
 		}
-
-		if _, err = tx.Exec(`
-			INSERT OR IGNORE INTO acked 
-			(queue_info_id, group_name, partition_id, global_id) 
-			VALUES (?, ?, ?, ?)`, queueInfoID, group, partitionID, globalID); err != nil {
-			return err
+		// inflight에서 삭제
+		inFlightDeleteErr := m.deleteInflight(tx, queueInfoID, globalID, partitionID, group, receipt)
+		if inFlightDeleteErr != nil {
+			return inFlightDeleteErr
+		}
+		// acked에 삽입
+		ackErr := m.insertAcked(tx, queueInfoID, group, partitionID, globalID)
+		if ackErr != nil {
+			return ackErr
 		}
 		return nil
 	})
@@ -728,96 +277,65 @@ func (m *FileDBManager) AckMessageWithMeta(queue_name, group string, partitionID
 func (m *FileDBManager) NackMessage(
 	queue_name, group string, msgID int64, receipt string,
 	backoff time.Duration, maxDeliveries int, reason string) (err error) {
-	var globalID string
-	var partitionID int
-	err = m.db.QueryRow(`SELECT global_id, partition_id FROM queue WHERE id = ?`, msgID).Scan(&globalID, &partitionID)
-	if err != nil {
-		return err
-	}
-	return m.NackMessageWithMeta(queue_name, group, partitionID, globalID, receipt, backoff, maxDeliveries, reason)
-}
-
-func (m *FileDBManager) NackMessageWithMeta(
-	queue_name, group string, partitionID int, globalID, receipt string,
-	backoff time.Duration, maxDeliveries int, reason string) (err error) {
 	queueInfoID, err := m.getQueueInfoID(queue_name)
 	if queueInfoID < 0 || err != nil {
 		return fmt.Errorf("queue not found: %s", queue_name)
 	}
 
 	return m.inTx(func(tx *sql.Tx) error {
-		var retryCount int
-		if err = tx.QueryRow(
-			`SELECT delivery_count
-		FROM inflight
-		WHERE queue_info_id = ? AND global_id = ? AND partition_id = ? AND receipt = ?`,
-			queueInfoID, globalID, partitionID, receipt).Scan(&retryCount); err != nil {
-			return err
+		var globalID string
+		var partitionID int
+		// msgID -> globalID, partitionID 조회
+		globalID, partitionID, checkErr := m.existsMsgID(tx, msgID)
+		if checkErr != nil {
+			return checkErr
 		}
 
-		// 지수적 backoff 증가
-		backoffSec := int(backoff.Seconds())
-		if backoffSec < 1 {
-			backoffSec = 1
-		} // clamp
-		jitter := util.GenerateJitter(backoffSec)
-		backoffSec = backoffSec*(1<<(retryCount-1)) + jitter // 첫 호출 기준 2^(n-1)
-		if backoffSec > OneDayInSeconds {
-			backoffSec = OneDayInSeconds
+		// 현재 delivery_count 조회
+		deliveryCount, deliveryCntErr := m.getInflightDeliveryCount(tx, queueInfoID, globalID, partitionID, receipt)
+		if deliveryCntErr != nil || deliveryCount < 1 {
+			return deliveryCntErr
 		}
 
-		res, err := tx.Exec(`
-        UPDATE inflight
-        SET lease_until    = DATETIME('now', ? || ' seconds'),
-            delivery_count = delivery_count + 1,
-            last_error     = ?
-        WHERE queue_info_id = ? AND global_id = ? AND partition_id = ? AND receipt = ?
-    `, backoffSec,
-			reason,
-			queueInfoID, globalID, partitionID, receipt)
-		if err != nil {
-			return err
-		}
-
-		n, _ := res.RowsAffected()
-		if n == 0 {
-			return queue_error.ErrContended
-		}
-
-		var dc int
-		if err = tx.QueryRow(`
-        SELECT delivery_count 
-		FROM inflight 
-		WHERE queue_info_id = ? AND group_name = ? AND global_id = ? AND partition_id = ? AND receipt = ?
-    `, queueInfoID, group, globalID, partitionID, receipt).Scan(&dc); err != nil {
-			return err
-		}
-		if dc > maxDeliveries {
-			if _, err = tx.Exec(`
-		INSERT INTO dlq(q_id, queue_info_id, global_id, partition_id, msg, failed_group, reason)
-		SELECT q.id, q.queue_info_id, q.global_id, q.partition_id, q.msg, ?, ?
-		FROM queue q WHERE q.queue_info_id = ? AND q.global_id = ? AND q.partition_id = ?
-        `, group, reason, queueInfoID, globalID, partitionID); err != nil {
-				return err
+		if deliveryCount <= maxDeliveries {
+			// 지수적 backoff 증가
+			backoffSec := int(backoff.Seconds())
+			if backoffSec < 1 {
+				backoffSec = 1
+			} // clamp
+			jitter := util.GenerateJitter(backoffSec)
+			backoffSec = backoffSec*(1<<(deliveryCount-1)) + jitter // 첫 호출 기준 2^(n-1)
+			if backoffSec > OneDayInSeconds {
+				backoffSec = OneDayInSeconds
 			}
 
-			if _, err = tx.Exec(`
-		DELETE FROM inflight 
-		WHERE 
-			queue_info_id = ? 
-			AND group_name = ? 
-			AND global_id = ? 
-			AND partition_id = ? 
-			AND receipt = ?`,
-				queueInfoID, group, globalID, partitionID, receipt); err != nil {
-				return err
+			// inflight 업데이트
+			updateInflightNackErr := m.updateInflightNack(
+				tx, queueInfoID, globalID, partitionID,
+				receipt, backoffSec, reason)
+			if updateInflightNackErr != nil {
+				return updateInflightNackErr
 			}
-			if _, err = tx.Exec(`
-		INSERT OR IGNORE INTO acked 
-		(queue_info_id, group_name, partition_id, global_id) 
-		VALUES (?, ?, ?, ?)`, queueInfoID, group, partitionID, globalID); err != nil {
-				return err
+		} else {
+			// 최대 재전송 횟수 초과 → DLQ로 이동
+			insertDLQErr := m.insertDLQ(tx, queueInfoID, partitionID, globalID, nil, group, reason)
+			if insertDLQErr != nil {
+				return insertDLQErr
 			}
+
+			// inflight에서 삭제
+			deleteInflightErr := m.deleteInflight(tx, queueInfoID, globalID, partitionID, group, receipt)
+			if deleteInflightErr != nil {
+				return deleteInflightErr
+			}
+
+			// acked에도 삽입(중복 방지용)
+			insertAckedErr := m.insertAcked(tx, queueInfoID, group, partitionID, globalID)
+			if insertAckedErr != nil {
+				return insertAckedErr
+			}
+
+			// 로그 남기기
 			m.logger.Warn("Message exceeded max deliveries, moved to DLQ",
 				"queue", queue_name,
 				"group", group,
@@ -826,6 +344,7 @@ func (m *FileDBManager) NackMessageWithMeta(
 				"max_deliveries", maxDeliveries,
 			)
 		}
+
 		return nil
 	})
 }
@@ -902,12 +421,7 @@ func (m *FileDBManager) GetAllStatus() ([]internal.QueueStatus, error) {
 	return statuses, nil
 }
 
-func (m *FileDBManager) PeekMessage(queue_name, group string) (_ queueMsg, err error) {
-	partitionID := 0
-	return m.PeekMessageWithMeta(queue_name, group, partitionID)
-}
-
-func (m *FileDBManager) PeekMessageWithMeta(queue_name, group string, partitionID int) (_ queueMsg, err error) {
+func (m *FileDBManager) PeekMessage(queue_name, group string, partitionID int) (_ queueMsg, err error) {
 	queueInfoID, err := m.getQueueInfoID(queue_name)
 	if queueInfoID < 0 || err != nil {
 		return queueMsg{}, fmt.Errorf("queue not found: %s", queue_name)
@@ -915,55 +429,16 @@ func (m *FileDBManager) PeekMessageWithMeta(queue_name, group string, partitionI
 	// 트랜잭션 시작
 	return m.inTxWithQueueMsg(func(tx *sql.Tx) (queueMsg, error) {
 		var msg queueMsg
-		msg.QueueName = queue_name
-		// Implement the logic to peek a message from the queue
-		err = tx.QueryRow(`
-		SELECT 
-		q.id, q.msg, q.insert_ts, "" as receipt, q.global_id, q.partition_id
-		FROM queue q
-		LEFT JOIN acked a   
-			ON a.queue_info_id = q.queue_info_id 
-			AND a.global_id = q.global_id 
-			AND a.group_name = ? 
-			AND a.partition_id = ?
-		LEFT JOIN inflight i 
-			ON i.queue_info_id = q.queue_info_id 
-			AND i.q_id = q.id 
-			AND i.group_name = ? 
-			AND i.partition_id = ?
-		JOIN queue_info qi ON
-			qi.id = q.queue_info_id
-		WHERE
-		  q.queue_info_id = ?  
-		  AND q.visible_at <= CURRENT_TIMESTAMP
-		  AND a.global_id IS NULL
-		  AND (i.q_id IS NULL OR i.lease_until <= CURRENT_TIMESTAMP)
-		  AND q.partition_id = ?
-		ORDER BY q.id ASC
-		LIMIT 1
-	`, group, partitionID,
-			group, partitionID,
-			queueInfoID, partitionID).Scan(&msg.ID, &msg.Msg, &msg.InsertTS, &msg.Receipt, &msg.GlobalID, &msg.PartitionID)
-		if err == sql.ErrNoRows {
-			return queueMsg{}, queue_error.ErrEmpty
-		}
+		msg, err := m.getCandidateQueueMsg(tx, queueInfoID, group, partitionID)
 		if err != nil {
 			return queueMsg{}, err
 		}
+		msg.QueueName = queue_name
 		return msg, nil
 	})
 }
 
 func (m *FileDBManager) RenewMessage(queue_name, group string, msgID int64, receipt string, extendSec int) error {
-	var globalID string
-	err := m.db.QueryRow(`SELECT global_id FROM queue WHERE id = ?`, msgID).Scan(&globalID)
-	if err != nil {
-		return err
-	}
-	return m.RenewMessageWithMeta(queue_name, group, globalID, receipt, extendSec)
-}
-
-func (m *FileDBManager) RenewMessageWithMeta(queue_name, group string, globalID, receipt string, extendSec int) error {
 	if extendSec < 1 {
 		extendSec = 1
 	}
@@ -973,23 +448,13 @@ func (m *FileDBManager) RenewMessageWithMeta(queue_name, group string, globalID,
 	}
 
 	return m.inTx(func(tx *sql.Tx) error {
-		res, err := tx.Exec(`
-			UPDATE inflight
-			SET lease_until = DATETIME('now', '+' || ? || ' seconds')
-			WHERE queue_info_id = ? AND group_name = ? AND global_id = ? AND receipt = ?
-			AND lease_until > CURRENT_TIMESTAMP
-		`, extendSec,
-			queueInfoID, group, globalID, receipt)
+		globalID, _, err := m.existsMsgID(tx, msgID)
 		if err != nil {
 			return err
 		}
-
-		n, err := res.RowsAffected()
-		if err != nil {
-			return err
-		}
-		if n == 0 {
-			return queue_error.ErrLeaseExpired
+		renewErr := m.renewInflightLease(tx, queueInfoID, group, globalID, receipt, extendSec)
+		if renewErr != nil {
+			return renewErr
 		}
 		return nil
 	})
@@ -1041,20 +506,4 @@ func (m *FileDBManager) inTxWithQueueMsg(txFunc func(tx *sql.Tx) (queueMsg, erro
 	}()
 	queueMsg, err := txFunc(tx)
 	return queueMsg, err
-}
-
-func (m *FileDBManager) delayToSeconds(delay string) (string, error) {
-	mod := fmt.Sprintf("+%d seconds", 0)
-	if delay == "" {
-		return mod, nil
-	}
-	dur, err := time.ParseDuration(delay)
-	if err != nil {
-		return "", err
-	}
-	sec := int(dur.Round(time.Second).Seconds())
-	if sec < 0 {
-		sec = 0
-	}
-	return fmt.Sprintf("+%d seconds", sec), nil
 }
