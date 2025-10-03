@@ -20,10 +20,10 @@ func NewQueue(queueName string, queue internal.Queue, logger *slog.Logger) *Queu
 	}
 }
 
-func (qc *QueueClient) Produce(item interface{}, delay string) error {
+func (qc *QueueClient) Produce(item internal.EnqueueMessage) error {
 	// TODO : implement Enqueue logic
 	// If delay is not provided, use default value "0s"
-	if err := qc.Queue.Enqueue(qc.QueueName, item, delay); err != nil {
+	if err := qc.Queue.Enqueue(qc.QueueName, item); err != nil {
 		return err
 	}
 	return nil

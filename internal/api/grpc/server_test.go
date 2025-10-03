@@ -15,8 +15,7 @@ import (
 type enqueueBatchCall struct {
 	queueName string
 	mode      string
-	delay     string
-	items     []interface{}
+	items     []internal.EnqueueMessage
 }
 
 type mockQueue struct {
@@ -30,10 +29,10 @@ func (m *mockQueue) CreateQueue(string) error { return nil }
 
 func (m *mockQueue) DeleteQueue(string) error { return nil }
 
-func (m *mockQueue) Enqueue(string, interface{}, string) error { return nil }
+func (m *mockQueue) Enqueue(string, internal.EnqueueMessage) error { return nil }
 
-func (m *mockQueue) EnqueueBatch(queueName, mode, delay string, items []interface{}) (internal.BatchResult, error) {
-	m.enqueueBatchCalls = append(m.enqueueBatchCalls, enqueueBatchCall{queueName: queueName, mode: mode, delay: delay, items: items})
+func (m *mockQueue) EnqueueBatch(queueName, mode string, items []internal.EnqueueMessage) (internal.BatchResult, error) {
+	m.enqueueBatchCalls = append(m.enqueueBatchCalls, enqueueBatchCall{queueName: queueName, mode: mode, items: items})
 	if m.enqueueBatchResponse != nil {
 		return *m.enqueueBatchResponse, m.enqueueBatchError
 	}
@@ -76,7 +75,7 @@ func TestQueueServiceEnqueueBatchSuccess(t *testing.T) {
 	req := &EnqueueBatchRequest{
 		QueueName: "test-queue",
 		Mode:      "stopOnFailure",
-		Messages:  []string{"first", "second"},
+		Messages:  []*EnqueueMessage{{Message: "first"}, {Message: "second"}},
 	}
 
 	resp, err := server.EnqueueBatch(context.Background(), req)
@@ -105,7 +104,10 @@ func TestQueueServiceEnqueueBatchSuccess(t *testing.T) {
 	if call.mode != "stopOnFailure" {
 		t.Fatalf("mode = %s, want stopOnFailure", call.mode)
 	}
-	expectedItems := []interface{}{"first", "second"}
+	expectedItems := []internal.EnqueueMessage{
+		{Item: "first"},
+		{Item: "second"},
+	}
 	if !reflect.DeepEqual(call.items, expectedItems) {
 		t.Fatalf("enqueue items = %#v, want %#v", call.items, expectedItems)
 	}
@@ -126,7 +128,7 @@ func TestQueueServiceEnqueueBatchPartialSuccess(t *testing.T) {
 	req := &EnqueueBatchRequest{
 		QueueName: "test-queue",
 		Mode:      "partialSuccess",
-		Messages:  []string{"first", "second", "third"},
+		Messages:  []*EnqueueMessage{{Message: "first"}, {Message: "second"}, {Message: "third"}},
 	}
 
 	resp, err := server.EnqueueBatch(context.Background(), req)
@@ -155,7 +157,7 @@ func TestQueueServiceEnqueueBatchMissingQueueName(t *testing.T) {
 	mq := &mockQueue{}
 	server := newTestGRPCServer(mq)
 
-	req := &EnqueueBatchRequest{QueueName: "", Mode: "stopOnFailure", Messages: []string{"msg"}}
+	req := &EnqueueBatchRequest{QueueName: "", Mode: "stopOnFailure", Messages: []*EnqueueMessage{{Message: "msg"}}}
 
 	resp, err := server.EnqueueBatch(context.Background(), req)
 	if err == nil {
@@ -173,7 +175,7 @@ func TestQueueServiceEnqueueBatchEmptyMessages(t *testing.T) {
 	mq := &mockQueue{}
 	server := newTestGRPCServer(mq)
 
-	req := &EnqueueBatchRequest{QueueName: "test-queue", Mode: "stopOnFailure", Messages: []string{}}
+	req := &EnqueueBatchRequest{QueueName: "test-queue", Mode: "stopOnFailure", Messages: []*EnqueueMessage{}}
 
 	resp, err := server.EnqueueBatch(context.Background(), req)
 	if err == nil {
@@ -191,7 +193,7 @@ func TestQueueServiceEnqueueBatchQueueError(t *testing.T) {
 	mq := &mockQueue{enqueueBatchError: errors.New("boom")}
 	server := newTestGRPCServer(mq)
 
-	req := &EnqueueBatchRequest{QueueName: "test-queue", Mode: "stopOnFailure", Messages: []string{"msg"}}
+	req := &EnqueueBatchRequest{QueueName: "test-queue", Mode: "stopOnFailure", Messages: []*EnqueueMessage{{Message: "msg"}}}
 
 	resp, err := server.EnqueueBatch(context.Background(), req)
 	if err == nil {

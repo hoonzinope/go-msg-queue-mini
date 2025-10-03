@@ -51,24 +51,27 @@ func TestFileDBQueueEnqueueBatchSuccess(t *testing.T) {
 	createQueueOrFail(t, queue, queueName)
 
 	mode := "stopOnFailure"
-	delay := "0s"
-	deduplicationID := "dedup-1"
-	batch := []interface{}{"first", map[string]interface{}{"foo": "bar"}}
-	batchResult, err := queue.EnqueueBatch(queueName, mode, delay, deduplicationID, batch)
+	batchData := make([]internal.EnqueueMessage, 0)
+	batchData = append(batchData, internal.EnqueueMessage{Item: "first", Delay: "0s", DeduplicationID: "dedup-1"})
+	batchData = append(batchData, internal.EnqueueMessage{Item: map[string]interface{}{"foo": "bar"}, Delay: "0s", DeduplicationID: "dedup-2"})
+	batchResult, err := queue.EnqueueBatch(queueName, mode, batchData)
 	if err != nil {
 		t.Fatalf("enqueue batch returned error: %v", err)
 	}
-	if batchResult.SuccessCount != int64(len(batch)) {
-		t.Fatalf("enqueue batch success count = %d, want %d", batchResult.SuccessCount, int64(len(batch)))
+	if batchResult.SuccessCount != int64(len(batchData)) {
+		t.Fatalf("enqueue batch success count = %d, want %d", batchResult.SuccessCount, int64(len(batchData)))
 	}
 
-	expected := []interface{}{"first", map[string]interface{}{"foo": "bar"}}
+	expected := []internal.EnqueueMessage{
+		{Item: "first", Delay: "0s", DeduplicationID: "dedup-1"},
+		{Item: map[string]interface{}{"foo": "bar"}, Delay: "0s", DeduplicationID: "dedup-2"},
+	}
 	for idx, want := range expected {
 		msg, err := queue.Dequeue(queueName, "group-A", "consumer-1")
 		if err != nil {
 			t.Fatalf("dequeue failed at index %d: %v", idx, err)
 		}
-		if !reflect.DeepEqual(msg.Payload, want) {
+		if !reflect.DeepEqual(msg.Payload, want.Item) {
 			t.Fatalf("dequeued payload = %#v, want %#v", msg.Payload, want)
 		}
 		if ackErr := queue.Ack(queueName, "group-A", msg.ID, msg.Receipt); ackErr != nil {
@@ -84,10 +87,10 @@ func TestFileDBQueueEnqueueBatchSuccess(t *testing.T) {
 func TestFileDBQueueEnqueueBatchQueueNotFound(t *testing.T) {
 	queue := newTestQueue(t)
 	mode := "stopOnFailure"
-	delay := "0s"
-	deduplicationID := "dedup-2"
-	batch := []interface{}{"no-queue"}
-	batchResult, err := queue.EnqueueBatch("missing-queue", mode, delay, deduplicationID, batch)
+	batch := []internal.EnqueueMessage{
+		{Item: "no-queue", Delay: "0s", DeduplicationID: "dedup-2"},
+	}
+	batchResult, err := queue.EnqueueBatch("missing-queue", mode, batch)
 	if err == nil {
 		t.Fatal("expected error when enqueueing to missing queue, got nil")
 	}
@@ -105,11 +108,13 @@ func TestFileDBQueueEnqueueBatchStopOnFailureMarshalError(t *testing.T) {
 	createQueueOrFail(t, queue, queueName)
 
 	invalid := make(chan int)
-	batch := []interface{}{"valid", invalid}
-	delay := "0s"
-	deduplicationID := "dedup-3"
+	batch := []internal.EnqueueMessage{
+		{Item: "valid-message", Delay: "0s", DeduplicationID: "dedup-1"},
+		{Item: invalid, Delay: "0s", DeduplicationID: "dedup-2"},
+		{Item: "another-valid-message", Delay: "0s", DeduplicationID: "dedup-3"},
+	}
 
-	result, err := queue.EnqueueBatch(queueName, "stopOnFailure", delay, deduplicationID, batch)
+	result, err := queue.EnqueueBatch(queueName, "stopOnFailure", batch)
 	if err == nil {
 		t.Fatal("expected marshal error, got nil")
 	}
@@ -136,14 +141,21 @@ func TestFileDBQueueEnqueueBatchPartialSuccessChunkError(t *testing.T) {
 	queueName := "enqueue-batch-partial-success-chunk-error"
 	createQueueOrFail(t, queue, queueName)
 
-	items := make([]interface{}, 101)
-	for i := 0; i < 100; i++ {
-		items[i] = fmt.Sprintf("msg-%03d", i)
-	}
-	items[100] = make(chan int)
 	delay := "0s"
-	deduplicationID := "dedup-4"
-	result, err := queue.EnqueueBatch(queueName, "partialSuccess", delay, deduplicationID, items)
+	items := make([]internal.EnqueueMessage, 101)
+	for i := 0; i < 100; i++ {
+		items[i] = internal.EnqueueMessage{
+			Item:            fmt.Sprintf("msg-%03d", i),
+			Delay:           delay,
+			DeduplicationID: fmt.Sprintf("dedup-%03d", i),
+		}
+	}
+	items[100] = internal.EnqueueMessage{
+		Item:            make(chan int),
+		Delay:           delay,
+		DeduplicationID: "dedup-error",
+	}
+	result, err := queue.EnqueueBatch(queueName, "partialSuccess", items)
 	if err != nil {
 		t.Fatalf("expected nil error, got %v", err)
 	}

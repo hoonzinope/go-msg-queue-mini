@@ -14,10 +14,14 @@ type EnqueueResponse struct {
 }
 
 type EnqueueBatchRequest struct {
-	Mode            string            `json:"mode" binding:"required,oneof=partialSuccess stopOnFailure"`
-	Delay           string            `json:"delay"`            // optional, e.g., "10s", "1m"
-	DeduplicationID string            `json:"deduplication_id"` // optional, for FIFO queues
-	Messages        []json.RawMessage `json:"messages" binding:"required"`
+	Mode     string           `json:"mode" binding:"required,oneof=partialSuccess stopOnFailure"`
+	Messages []EnqueueMessage `json:"messages" binding:"required,dive,required"`
+}
+
+type EnqueueMessage struct {
+	Message         json.RawMessage `json:"message"`
+	Delay           string          `json:"delay"`
+	DeduplicationID string          `json:"deduplication_id"`
 }
 
 type EnqueueBatchResponse struct {

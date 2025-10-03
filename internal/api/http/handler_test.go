@@ -19,8 +19,7 @@ import (
 type enqueueBatchCall struct {
 	queueName string
 	mode      string
-	delay     string
-	items     []interface{}
+	items     []internal.EnqueueMessage
 }
 
 type mockQueue struct {
@@ -34,10 +33,10 @@ func (m *mockQueue) CreateQueue(string) error { return nil }
 
 func (m *mockQueue) DeleteQueue(string) error { return nil }
 
-func (m *mockQueue) Enqueue(string, interface{}, string) error { return nil }
+func (m *mockQueue) Enqueue(string, internal.EnqueueMessage) error { return nil }
 
-func (m *mockQueue) EnqueueBatch(queueName, mode, delay string, items []interface{}) (internal.BatchResult, error) {
-	m.enqueueBatchCalls = append(m.enqueueBatchCalls, enqueueBatchCall{queueName: queueName, mode: mode, delay: delay, items: items})
+func (m *mockQueue) EnqueueBatch(queueName, mode string, items []internal.EnqueueMessage) (internal.BatchResult, error) {
+	m.enqueueBatchCalls = append(m.enqueueBatchCalls, enqueueBatchCall{queueName: queueName, mode: mode, items: items})
 	if m.enqueueBatchResponse != nil {
 		return *m.enqueueBatchResponse, m.enqueueBatchError
 	}
@@ -78,9 +77,9 @@ func TestEnqueueBatchHandlerSuccess(t *testing.T) {
 
 	body := EnqueueBatchRequest{
 		Mode: "stopOnFailure",
-		Messages: []json.RawMessage{
-			json.RawMessage(`{"foo":"bar"}`),
-			json.RawMessage(`42`),
+		Messages: []EnqueueMessage{
+			{Message: json.RawMessage(`{"foo":"bar"}`)},
+			{Message: json.RawMessage(`42`)},
 		},
 	}
 	encoded, err := json.Marshal(body)
@@ -111,29 +110,32 @@ func TestEnqueueBatchHandlerSuccess(t *testing.T) {
 	if call.mode != "stopOnFailure" {
 		t.Fatalf("mode = %s, want stopOnFailure", call.mode)
 	}
-	expectedItems := []interface{}{
-		json.RawMessage(`{"foo":"bar"}`),
-		json.RawMessage(`42`),
+	expectedItems := []EnqueueMessage{
+		{Message: json.RawMessage(`{"foo":"bar"}`)},
+		{Message: json.RawMessage(`42`)},
 	}
 	if len(call.items) != len(expectedItems) {
 		t.Fatalf("items length = %d, want %d", len(call.items), len(expectedItems))
 	}
 	for i, item := range call.items {
 		exp := expectedItems[i]
-		rawItem, ok := item.(json.RawMessage)
-		if !ok {
-			t.Fatalf("item %d type = %T, want json.RawMessage", i, item)
-		}
-		rawExp, ok := exp.(json.RawMessage)
-		if !ok {
-			t.Fatalf("expected item %d type = %T, want json.RawMessage", i, exp)
-		}
-		if !bytes.Equal([]byte(rawItem), []byte(rawExp)) {
-			t.Fatalf("item %d = %s, want %s", i, rawItem, rawExp)
+		itemBytes, _ := json.Marshal(item.Item)
+		if !bytes.Equal(itemBytes, exp.Message) {
+			t.Fatalf("item %d = %s, want %s", i, itemBytes, exp.Message)
 		}
 	}
 
 	var resp EnqueueBatchResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to unmarshal response: %v", err)
+	}
+	if resp.Status != "enqueued" {
+		t.Fatalf("response status = %s, want enqueued", resp.Status)
+	}
+	if resp.SuccessCount != mq.enqueueBatchResult {
+		t.Fatalf("success count = %d, want %d", resp.SuccessCount, mq.enqueueBatchResult)
+	}
+
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("failed to unmarshal response: %v", err)
 	}
@@ -157,7 +159,12 @@ func TestEnqueueBatchHandlerPartialSuccess(t *testing.T) {
 	}
 	server := newTestHTTPServer(mq)
 
-	body := EnqueueBatchRequest{Mode: "partialSuccess", Messages: []json.RawMessage{json.RawMessage(`"good"`), json.RawMessage(`"bad"`)}}
+	enqueueMsgs := []EnqueueMessage{
+		{Message: json.RawMessage(`"good"`)},
+		{Message: json.RawMessage(`"bad"`)},
+	}
+
+	body := EnqueueBatchRequest{Mode: "partialSuccess", Messages: enqueueMsgs}
 	encoded, err := json.Marshal(body)
 	if err != nil {
 		t.Fatalf("failed to marshal request: %v", err)
@@ -233,7 +240,10 @@ func TestEnqueueBatchHandlerQueueError(t *testing.T) {
 	mq := &mockQueue{enqueueBatchError: errors.New("boom")}
 	server := newTestHTTPServer(mq)
 
-	body := EnqueueBatchRequest{Mode: "stopOnFailure", Messages: []json.RawMessage{json.RawMessage(`"msg"`)}}
+	enqueueMsgs := []EnqueueMessage{
+		{Message: json.RawMessage(`"msg"`)},
+	}
+	body := EnqueueBatchRequest{Mode: "stopOnFailure", Messages: enqueueMsgs}
 	encoded, err := json.Marshal(body)
 	if err != nil {
 		t.Fatalf("failed to marshal request: %v", err)

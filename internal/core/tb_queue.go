@@ -136,12 +136,21 @@ func (m *FileDBManager) insertMessageBatchStopOnFailure(
 				return txCnt, fmt.Errorf("error checking duplication ID: %w", err)
 			}
 			globalID := util.GenerateGlobalID()
-			_, insertErr := stmt.Exec(queueInfoID, msg, globalID, partitionID, mod)
+			res, insertErr := stmt.Exec(queueInfoID, msg, globalID, partitionID, mod)
 			if insertErr != nil {
 				return txCnt, insertErr
 			}
+			queue_row_id, err := res.LastInsertId()
+			if err != nil {
+				m.deleteDeduplicationLogs(tx, logId) // 삽입 실패시 deduplication_log 삭제
+				return txCnt, fmt.Errorf("error getting last insert ID: %w", err)
+			}
+			if queue_row_id <= 0 {
+				m.deleteDeduplicationLogs(tx, logId) // 삽입 실패시 deduplication_log 삭제
+				return txCnt, fmt.Errorf("failed to insert message")
+			}
 			// log_id, queue_row_id 업데이트
-			if err := m.updateDeduplicationLogWithQueueRowID(tx, logId, txCnt+1); err != nil {
+			if err := m.updateDeduplicationLogWithQueueRowID(tx, logId, queue_row_id); err != nil {
 				m.deleteDeduplicationLogs(tx, logId) // 삽입 실패시 deduplication_log 삭제
 				return txCnt, fmt.Errorf("error updating deduplication log with queue row ID: %w", err)
 			}
@@ -316,7 +325,7 @@ func (m *FileDBManager) getCandidateQueueMsg(tx *sql.Tx, queueInfoID int64, grou
 		&candidateMsg.InsertTS, &candidateMsg.Receipt,
 		&candidateMsg.GlobalID, &candidateMsg.PartitionID)
 	if err == sql.ErrNoRows {
-		return queueMsg{}, queue_error.ErrNoMessage
+		return queueMsg{}, queue_error.ErrEmpty
 	}
 	if err != nil {
 		return queueMsg{}, err

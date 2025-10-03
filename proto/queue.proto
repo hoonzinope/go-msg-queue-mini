@@ -83,9 +83,13 @@ message DeleteQueueResponse {
 // HTTP: EnqueueRequest{ message json.RawMessage }
 message EnqueueRequest {
   string queue_name = 1;
-  string message = 2;
-  string delay = 3; // optional, e.g., "5s","10m"
-  string deduplication_id = 4; // optional
+  EnqueueMessage message = 2;
+}
+
+message EnqueueMessage {
+  string message = 1;
+  string delay = 2; // optional, e.g., "5s","10m"
+  string deduplication_id = 3; // optional
 }
 
 // HTTP: EnqueueResponse{ status, message }
@@ -99,9 +103,7 @@ message EnqueueResponse {
 message EnqueueBatchRequest {
   string queue_name = 1;
   string mode = 2;
-  repeated string messages = 3;
-  string delay = 4; // optional, e.g., "10s", "5m"
-  string deduplication_id = 5; // optional
+  repeated EnqueueMessage messages = 3;
 }
 
 // EnqueueBatch response

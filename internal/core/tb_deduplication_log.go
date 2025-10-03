@@ -12,12 +12,15 @@ func (m *FileDBManager) createDeduplicationLogTable() error {
 	createTableSQL := `
 		-- 중복 로그
 		CREATE TABLE IF NOT EXISTS deduplication_log (
+		id INTEGER,
 		queue_info_id INTEGER NOT NULL,
 		deduplication_id TEXT NOT NULL,
 		expires_at TIMESTAMP NOT NULL,
 		queue_row_id INTEGER,                      -- 최초 삽입된 queue.id를 기록(선택) 
 		insert_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-		PRIMARY KEY (queue_info_id, deduplication_id)  -- UNIQUE 대용 (SQLite는 PK=UNIQUE)
+		PRIMARY KEY (id),
+		UNIQUE(queue_info_id, deduplication_id),
+		FOREIGN KEY (queue_info_id) REFERENCES queue_info(id) ON DELETE CASCADE
 		);`
 	_, err := m.db.Exec(createTableSQL)
 
