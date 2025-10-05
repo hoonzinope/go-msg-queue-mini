@@ -191,3 +191,83 @@ func TestFileDBQueueEnqueueBatchPartialSuccessChunkError(t *testing.T) {
 		t.Fatalf("expected empty queue after draining, got %v", err)
 	}
 }
+
+func TestFileDBQueueEnqueueDuplicateDedupID(t *testing.T) {
+	queue := newTestQueue(t)
+	queueName := "enqueue-duplicate-dedup-id"
+	createQueueOrFail(t, queue, queueName)
+
+	first := internal.EnqueueMessage{Item: "original", Delay: "0s", DeduplicationID: "dedup-same"}
+	if err := queue.Enqueue(queueName, first); err != nil {
+		t.Fatalf("enqueue returned error: %v", err)
+	}
+
+	dupErr := queue.Enqueue(queueName, internal.EnqueueMessage{Item: "duplicate", Delay: "0s", DeduplicationID: "dedup-same"})
+	if dupErr == nil {
+		t.Fatal("expected duplicate enqueue to return error, got nil")
+	}
+	if !errors.Is(dupErr, queue_error.ErrDuplicate) {
+		t.Fatalf("expected duplicate error, got %v", dupErr)
+	}
+
+	msg, err := queue.Dequeue(queueName, "group-dup", "consumer-dup")
+	if err != nil {
+		t.Fatalf("dequeue failed: %v", err)
+	}
+	payload, ok := msg.Payload.(string)
+	if !ok {
+		t.Fatalf("expected payload type string, got %T", msg.Payload)
+	}
+	if payload != "original" {
+		t.Fatalf("payload = %s, want %s", payload, "original")
+	}
+	if err := queue.Ack(queueName, "group-dup", msg.ID, msg.Receipt); err != nil {
+		t.Fatalf("ack failed: %v", err)
+	}
+
+	if _, err := queue.Dequeue(queueName, "group-dup", "consumer-dup"); !errors.Is(err, queue_error.ErrEmpty) {
+		t.Fatalf("expected queue empty, got %v", err)
+	}
+}
+
+func TestFileDBQueueEnqueueBatchStopOnFailureDuplicate(t *testing.T) {
+	queue := newTestQueue(t)
+	queueName := "enqueue-batch-stop-duplicate"
+	createQueueOrFail(t, queue, queueName)
+
+	seed := internal.EnqueueMessage{Item: "seed", Delay: "0s", DeduplicationID: "dedup-shared"}
+	if err := queue.Enqueue(queueName, seed); err != nil {
+		t.Fatalf("enqueue returned error: %v", err)
+	}
+
+	msg, err := queue.Dequeue(queueName, "group-seed", "consumer-seed")
+	if err != nil {
+		t.Fatalf("dequeue failed: %v", err)
+	}
+	if err := queue.Ack(queueName, "group-seed", msg.ID, msg.Receipt); err != nil {
+		t.Fatalf("ack failed: %v", err)
+	}
+
+	batch := []internal.EnqueueMessage{
+		{Item: "duplicate", Delay: "0s", DeduplicationID: "dedup-shared"},
+		{Item: "should-not-run", Delay: "0s", DeduplicationID: "dedup-new"},
+	}
+
+	result, err := queue.EnqueueBatch(queueName, "stopOnFailure", batch)
+	if err == nil {
+		t.Fatal("expected duplicate error from batch enqueue, got nil")
+	}
+	if !errors.Is(err, queue_error.ErrDuplicate) {
+		t.Fatalf("expected duplicate error, got %v", err)
+	}
+	if result.SuccessCount != 0 {
+		t.Fatalf("success count = %d, want 0", result.SuccessCount)
+	}
+	if result.FailedCount != int64(len(batch)) {
+		t.Fatalf("failed count = %d, want %d", result.FailedCount, len(batch))
+	}
+
+	if _, err := queue.Dequeue(queueName, "group-seed", "consumer-seed-2"); !errors.Is(err, queue_error.ErrEmpty) {
+		t.Fatalf("expected no new messages for same group, got %v", err)
+	}
+}

@@ -75,7 +75,7 @@ func TestQueueServiceEnqueueBatchSuccess(t *testing.T) {
 	req := &EnqueueBatchRequest{
 		QueueName: "test-queue",
 		Mode:      "stopOnFailure",
-		Messages:  []*EnqueueMessage{{Message: "first"}, {Message: "second"}},
+		Messages:  []*EnqueueMessage{{Message: "first", DeduplicationId: "dedup-1"}, {Message: "second", DeduplicationId: "dedup-2"}},
 	}
 
 	resp, err := server.EnqueueBatch(context.Background(), req)
@@ -105,8 +105,8 @@ func TestQueueServiceEnqueueBatchSuccess(t *testing.T) {
 		t.Fatalf("mode = %s, want stopOnFailure", call.mode)
 	}
 	expectedItems := []internal.EnqueueMessage{
-		{Item: "first"},
-		{Item: "second"},
+		{Item: "first", DeduplicationID: "dedup-1"},
+		{Item: "second", DeduplicationID: "dedup-2"},
 	}
 	if !reflect.DeepEqual(call.items, expectedItems) {
 		t.Fatalf("enqueue items = %#v, want %#v", call.items, expectedItems)
@@ -128,7 +128,7 @@ func TestQueueServiceEnqueueBatchPartialSuccess(t *testing.T) {
 	req := &EnqueueBatchRequest{
 		QueueName: "test-queue",
 		Mode:      "partialSuccess",
-		Messages:  []*EnqueueMessage{{Message: "first"}, {Message: "second"}, {Message: "third"}},
+		Messages:  []*EnqueueMessage{{Message: "first", DeduplicationId: "dup-1"}, {Message: "second", DeduplicationId: "dup-2"}, {Message: "third", DeduplicationId: "dup-3"}},
 	}
 
 	resp, err := server.EnqueueBatch(context.Background(), req)
@@ -150,6 +150,18 @@ func TestQueueServiceEnqueueBatchPartialSuccess(t *testing.T) {
 	}
 	if fm.GetError() != "duplicate" {
 		t.Fatalf("failed message error = %s, want duplicate", fm.GetError())
+	}
+	if len(mq.enqueueBatchCalls) != 1 {
+		t.Fatalf("enqueue batch call count = %d, want 1", len(mq.enqueueBatchCalls))
+	}
+	call := mq.enqueueBatchCalls[0]
+	expectedItems := []internal.EnqueueMessage{
+		{Item: "first", DeduplicationID: "dup-1"},
+		{Item: "second", DeduplicationID: "dup-2"},
+		{Item: "third", DeduplicationID: "dup-3"},
+	}
+	if !reflect.DeepEqual(call.items, expectedItems) {
+		t.Fatalf("enqueue items = %#v, want %#v", call.items, expectedItems)
 	}
 }
 

@@ -78,8 +78,8 @@ func TestEnqueueBatchHandlerSuccess(t *testing.T) {
 	body := EnqueueBatchRequest{
 		Mode: "stopOnFailure",
 		Messages: []EnqueueMessage{
-			{Message: json.RawMessage(`{"foo":"bar"}`)},
-			{Message: json.RawMessage(`42`)},
+			{Message: json.RawMessage(`{"foo":"bar"}`), DeduplicationID: "dedup-1"},
+			{Message: json.RawMessage(`42`), DeduplicationID: "dedup-2"},
 		},
 	}
 	encoded, err := json.Marshal(body)
@@ -111,8 +111,8 @@ func TestEnqueueBatchHandlerSuccess(t *testing.T) {
 		t.Fatalf("mode = %s, want stopOnFailure", call.mode)
 	}
 	expectedItems := []EnqueueMessage{
-		{Message: json.RawMessage(`{"foo":"bar"}`)},
-		{Message: json.RawMessage(`42`)},
+		{Message: json.RawMessage(`{"foo":"bar"}`), DeduplicationID: "dedup-1"},
+		{Message: json.RawMessage(`42`), DeduplicationID: "dedup-2"},
 	}
 	if len(call.items) != len(expectedItems) {
 		t.Fatalf("items length = %d, want %d", len(call.items), len(expectedItems))
@@ -122,6 +122,9 @@ func TestEnqueueBatchHandlerSuccess(t *testing.T) {
 		itemBytes, _ := json.Marshal(item.Item)
 		if !bytes.Equal(itemBytes, exp.Message) {
 			t.Fatalf("item %d = %s, want %s", i, itemBytes, exp.Message)
+		}
+		if item.DeduplicationID != exp.DeduplicationID {
+			t.Fatalf("dedup id %d = %s, want %s", i, item.DeduplicationID, exp.DeduplicationID)
 		}
 	}
 
@@ -160,8 +163,8 @@ func TestEnqueueBatchHandlerPartialSuccess(t *testing.T) {
 	server := newTestHTTPServer(mq)
 
 	enqueueMsgs := []EnqueueMessage{
-		{Message: json.RawMessage(`"good"`)},
-		{Message: json.RawMessage(`"bad"`)},
+		{Message: json.RawMessage(`"good"`), DeduplicationID: "dedup-good"},
+		{Message: json.RawMessage(`"bad"`), DeduplicationID: "dedup-bad"},
 	}
 
 	body := EnqueueBatchRequest{Mode: "partialSuccess", Messages: enqueueMsgs}
@@ -189,6 +192,14 @@ func TestEnqueueBatchHandlerPartialSuccess(t *testing.T) {
 	call := mq.enqueueBatchCalls[0]
 	if call.mode != "partialSuccess" {
 		t.Fatalf("mode = %s, want partialSuccess", call.mode)
+	}
+	if len(call.items) != len(enqueueMsgs) {
+		t.Fatalf("items length = %d, want %d", len(call.items), len(enqueueMsgs))
+	}
+	for i, item := range call.items {
+		if item.DeduplicationID != enqueueMsgs[i].DeduplicationID {
+			t.Fatalf("dedup id %d = %s, want %s", i, item.DeduplicationID, enqueueMsgs[i].DeduplicationID)
+		}
 	}
 
 	var resp EnqueueBatchResponse
