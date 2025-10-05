@@ -14,6 +14,7 @@
 - **미리보기/피킹**: 할당 없이 확인하는 `/peek`
 - **상태 확인**: 합계/ACK/Inflight/DLQ를 반환하는 `/status`
 - **배치 Enqueue**: `/enqueue/batch` 및 gRPC `EnqueueBatch`로 여러 메시지를 일괄 적재하며 `stopOnFailure`/`partialSuccess` 모드를 지원
+- **중복 방지**: `deduplication_id`를 지정하면 동일 큐에서 1시간 동안 같은 ID가 재적재되지 않아 FIFO 기반 멱등성을 제공
 - **운영 모드**: `debug` 모드(내장 프로듀서/컨슈머 + 모니터) 또는 HTTP/gRPC 서버
 
 ## 빠른 시작(Quick Start)
@@ -146,14 +147,15 @@ grpc:
   - 응답: `200 OK`, `{ "status": "deleted" }`
 
 - Enqueue: `POST /api/v1/:queue_name/enqueue` (헤더: `X-API-Key: <키>` 필요)
-  - 요청: `{ "message": <JSON format>, "delay": "<Go Duration>" }` (`delay` 생략 시 즉시 처리, 예: "10s", "1m", "1h30m")
+  - 요청: `{ "message": <JSON format>, "delay": "<Go Duration>", "deduplication_id": "<string>" }` (`delay`/`deduplication_id`는 선택, 예: "10s", "1m")
   - 예) `curl -X POST localhost:8080/api/v1/default/enqueue -H 'Content-Type: application/json' -H 'X-API-Key: $API_KEY' -d '{"message": {"text":"hello"}}'`
   - 비고: `delay`는 Go duration 문자열을 사용하며 잘못된 값은 요청을 실패시키고, 음수는 0초로 보정됩니다.
+  - 비고: `deduplication_id`를 지정하면 동일 큐에서 1시간 동안 같은 ID가 재삽입되지 않으며, 중복 요청은 단건에서는 오류로, 배치에서는 실패 항목으로 보고됩니다.
 - Enqueue Batch: `POST /api/v1/:queue_name/enqueue/batch` (헤더: `X-API-Key: <키>` 필요)
-  - 요청: `{ "mode": "partialSuccess"|"stopOnFailure", "messages": [<JSON format>, ...], "delay": "<Go Duration>" }`
+  - 요청: `{ "mode": "partialSuccess"|"stopOnFailure", "messages": [{"message": <JSON format>, "delay": "<Go Duration>", "deduplication_id": "<string>"}, ...] }`
   - 응답: `202 Accepted`, `{ "status": "enqueued", "success_count": <int>, "failure_count": <int>, "failed_messages": [{ "index": <int>, "message": "<raw>", "error": "<reason>" }, ...] }`
   - 동작: `stopOnFailure`는 첫 오류에서 중단하고 5xx로 실패를 반환하며, `partialSuccess`는 성공한 항목만 적재하고 실패 항목을 `failed_messages`에 포함합니다.
-  - 비고: `delay`를 지정하면 모든 메시지가 동일한 지연 후 가시화되며, 값은 Go duration 문자열을 따르고 음수는 0초로 보정됩니다.
+  - 비고: 각 메시지에 `delay`와 `deduplication_id`를 독립적으로 지정할 수 있으며, `deduplication_id` 충돌 시 해당 메시지는 실패 항목으로 기록됩니다.
 
 - Dequeue: `POST /api/v1/:queue_name/dequeue` (헤더: `X-API-Key: <키>` 필요)
   - 요청: `{ "group": "g1", "consumer_id": "c-1" }`
@@ -186,7 +188,7 @@ grpc:
 - 헬스체크: `queue.v1.QueueService/HealthCheck` → `{ status: "ok" }`.
 - 주요 RPC: `CreateQueue`, `DeleteQueue`, `Enqueue`, `EnqueueBatch`, `Dequeue`, `Ack`, `Nack`, `Peek`, `Renew`, `Status` (proto: `proto/queue.proto`).
 - 메시지 타입: gRPC `message` 필드는 문자열(string)이며, HTTP는 임의의 JSON을 지원합니다.
-- `Enqueue`/`EnqueueBatch` 요청은 선택적 `delay`(Go duration 문자열)로 메시지 가시 시점을 예약할 수 있으며, 생략 시 즉시 처리됩니다.
+- `Enqueue`/`EnqueueBatch` 요청은 선택적 `delay`(Go duration 문자열)와 `deduplication_id`(문자열)로 메시지 가시 시점을 예약하거나 1시간 멱등성을 적용할 수 있으며, 생략 시 즉시 처리됩니다.
 - `EnqueueBatch` 호출 시 `mode`를 `stopOnFailure` 또는 `partialSuccess`로 지정하고, 응답은 `failure_count`/`failed_messages`를 통해 부분 실패를 보고합니다. `stopOnFailure`에서 오류가 발생하면 전체 호출이 실패(5xx)로 끝납니다.
 - 호출 예시(grpcurl): `grpcurl -plaintext localhost:50051 list` / `grpcurl -plaintext -d '{"queue_name":"default","message":"hello","delay":"45s"}' localhost:50051 queue.v1.QueueService/Enqueue` / `grpcurl -plaintext -d '{"queue_name":"default","messages":["hi","there"],"delay":"1m"}' localhost:50051 queue.v1.QueueService/EnqueueBatch`.
 
@@ -211,6 +213,7 @@ grpc:
 - 필요 시 `-cover`로 커버리지 확인
 
 ## 변경 사항(요약)
+- 메시지 중복 방지 추가: HTTP/gRPC Enqueue 경로에 `deduplication_id`를 도입해 큐별 1시간 멱등성 윈도우를 제공합니다.
 - 메시지 지연 전송 지원: HTTP/gRPC Enqueue에 `delay`(Go duration) 옵션을 추가하고 파일 DB `visible_at`을 사용해 예약 처리합니다.
 - 배치 Enqueue API 추가: HTTP `/enqueue/batch`, gRPC `EnqueueBatch`, 파일 DB 큐의 일괄 쓰기 (`stopOnFailure`/`partialSuccess`) 지원.
 - `log/slog` 기반 구조화 로깅으로 전환(디버그 텍스트, 서버 모드 JSON) 및 공통 필드 정비.

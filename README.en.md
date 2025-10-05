@@ -14,6 +14,7 @@ A compact yet robust Go-based message queue. It supports Producer/Consumer runti
 - **Peek**: Inspect next message without claiming via `/peek`
 - **Status**: `/status` returns totals for queue/acked/inflight/dlq
 - **Batch enqueue**: Load multiple messages at once via `/enqueue/batch` and gRPC `EnqueueBatch`, supporting `stopOnFailure`/`partialSuccess` modes
+- **Deduplication**: Optional `deduplication_id` enforces per-queue idempotency within a 1-hour window
 - **Modes**: `debug` (local producers/consumers + monitor) or HTTP/gRPC server
 
 ## Quick Start
@@ -146,14 +147,15 @@ grpc:
   - Response: `200 OK`, `{ "status": "deleted" }`
 
 - Enqueue: `POST /api/v1/:queue_name/enqueue` (header: `X-API-Key: <key>` required)
-  - Request: `{ "message": <any JSON>, "delay": "<Go Duration>" }` (omit `delay` for immediate delivery; e.g., "10s", "1m", "1h30m")
+  - Request: `{ "message": <any JSON>, "delay": "<Go Duration>", "deduplication_id": "<string>" }` (`delay`/`deduplication_id` optional; e.g., "10s", "1m")
   - Example: `curl -X POST localhost:8080/api/v1/default/enqueue -H 'Content-Type: application/json' -H 'X-API-Key: $API_KEY' -d '{"message": {"text":"hello"}}'`
   - Note: `delay` must be a valid Go duration string; invalid values reject the request and negatives clamp to zero.
+  - Note: When `deduplication_id` is present the queue prevents re-enqueuing the same ID for 1 hour; duplicates return an error (or show up as failures in batch mode).
 - Enqueue Batch: `POST /api/v1/:queue_name/enqueue/batch` (header: `X-API-Key: <key>` required)
-  - Request: `{ "mode": "partialSuccess"|"stopOnFailure", "messages": [<any JSON>, ...], "delay": "<Go Duration>" }`
+  - Request: `{ "mode": "partialSuccess"|"stopOnFailure", "messages": [{"message": <any JSON>, "delay": "<Go Duration>", "deduplication_id": "<string>"}, ...] }`
   - Response: `202 Accepted`, `{ "status": "enqueued", "success_count": <int>, "failure_count": <int>, "failed_messages": [{ "index": <int>, "message": "<raw>", "error": "<reason>" }, ...] }`
   - Behavior: `stopOnFailure` stops on the first error and returns a 5xx, while `partialSuccess` enqueues what it can and reports failures via `failed_messages`.
-  - Note: The optional `delay` applies uniformly to every message in the batch, follows Go duration formatting, and negative values clamp to zero.
+  - Note: Each message can supply its own `delay` and `deduplication_id`; when a duplicate ID is detected that entry is reported in `failed_messages`.
 
 - Dequeue: `POST /api/v1/:queue_name/dequeue` (requires `X-API-Key`)
   - Request: `{ "group": "g1", "consumer_id": "c-1" }`
@@ -186,7 +188,7 @@ Common: server returns `X-Request-ID` (auto-generated if missing). Bursts may re
 - Health: `queue.v1.QueueService/HealthCheck` → `{ status: "ok" }`.
 - Core RPCs: `CreateQueue`, `DeleteQueue`, `Enqueue`, `EnqueueBatch`, `Dequeue`, `Ack`, `Nack`, `Peek`, `Renew`, `Status` (see `proto/queue.proto`).
 - Message type: gRPC `message` payloads are strings; HTTP accepts arbitrary JSON payloads.
-- `Enqueue`/`EnqueueBatch` accept an optional `delay` (Go duration string) to schedule visibility; omit it for immediate delivery.
+- `Enqueue`/`EnqueueBatch` accept optional `delay` (Go duration) and `deduplication_id` (string) for scheduling or 1-hour idempotency; omit them for immediate delivery.
 - For `EnqueueBatch`, set `mode` to `stopOnFailure` or `partialSuccess`; responses include `failure_count`/`failed_messages`, and `stopOnFailure` propagates errors as 5xx responses.
 - Example (grpcurl):
   - List services: `grpcurl -plaintext localhost:50051 list`
@@ -214,6 +216,7 @@ Examples (grpcurl)
 - Optionally use `-cover` for coverage
 
 ## Changes Summary
+- Added message deduplication: optional `deduplication_id` on HTTP/gRPC enqueue paths enforces a 1-hour per-queue idempotency window.
 - Added scheduled delivery: optional `delay` on HTTP/gRPC enqueue paths backed by the file DB `visible_at` column.
 - Added batch enqueue support: HTTP `/enqueue/batch`, gRPC `EnqueueBatch`, and batched writes in the file-backed queue.
 - Switched to structured logging via Go `log/slog` (text in debug mode, JSON otherwise) with shared diagnostic fields.
