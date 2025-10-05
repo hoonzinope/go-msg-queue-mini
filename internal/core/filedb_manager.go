@@ -156,10 +156,12 @@ func (m *FileDBManager) WriteMessage(
 			// 메시지 삽입
 			queueRowId, err := m.insertMessage(tx, queueInfoID, msg, globalID, partitionID, mod)
 			if err != nil || queueRowId <= 0 {
+				_ = m.deleteDeduplicationLogs(tx, logId)
 				return fmt.Errorf("error inserting message: %w", err)
 			}
 			// log_id, queue_row_id 업데이트
 			if err := m.updateDeduplicationLogWithQueueRowID(tx, logId, queueRowId); err != nil {
+				_ = m.deleteDeduplicationLogs(tx, logId)
 				return fmt.Errorf("error updating deduplication log with queue row ID: %w", err)
 			}
 			return nil
@@ -198,11 +200,11 @@ func (m *FileDBManager) WriteMessagesBatchWithMetaAndReturnFailed(
 	if err != nil {
 		return 0, nil, err
 	}
-	var failedMessages []internal.FailedMessage
+	var returnFailedMessages []internal.FailedMessage
 	successCount, err := m.inTxWithCount(func(tx *sql.Tx) (int64, error) {
 		cnt, failedMessages, err := m.insertMessageBatchReturnFailed(tx, queueInfoID, msgs, partitionID, delays, deduplicationIDs, 0)
 		for _, fm := range failedMessages {
-			failedMessages = append(failedMessages, internal.FailedMessage{
+			returnFailedMessages = append(returnFailedMessages, internal.FailedMessage{
 				Index:   fm.Index,
 				Reason:  fm.Reason,
 				Message: fm.Message,
@@ -213,7 +215,7 @@ func (m *FileDBManager) WriteMessagesBatchWithMetaAndReturnFailed(
 		}
 		return cnt, nil
 	})
-	return successCount, failedMessages, err
+	return successCount, returnFailedMessages, err
 }
 
 func (m *FileDBManager) ReadMessage(queue_name, group string, partitionID int, consumerID string, leaseSec int) (_ queueMsg, err error) {

@@ -4,8 +4,9 @@ import (
 	"database/sql"
 	"fmt"
 	"go-msg-queue-mini/internal/queue_error"
-	"time"
 )
+
+var expired_deduplication_log_cleanup_interval_seconds = 1 * 60 * 60 // 1 hour
 
 // create deduplication_log table
 func (m *FileDBManager) createDeduplicationLogTable() error {
@@ -42,7 +43,9 @@ func (m *FileDBManager) checkDuplicationID(tx *sql.Tx, queueInfoID int64, dedupI
 		return 0, fmt.Errorf("error expiring deduplication logs: %w", err)
 	}
 	// 중복 검사 및 삽입 시도
-	res, err := m.insertDeduplicationLogs(tx, queueInfoID, dedupID, 24*time.Hour)
+	// 1시간 후 만료
+	expired := fmt.Sprintf("+%d seconds", expired_deduplication_log_cleanup_interval_seconds)
+	res, err := m.insertDeduplicationLogs(tx, queueInfoID, dedupID, expired)
 	if err != nil {
 		return 0, fmt.Errorf("error inserting deduplication log: %w", err)
 	}
@@ -62,12 +65,12 @@ func (m *FileDBManager) expireDeduplicationLogs(tx *sql.Tx, queue_info_id int64,
 }
 
 // dedup_log 삽입
-func (m *FileDBManager) insertDeduplicationLogs(tx *sql.Tx, queue_info_id int64, dedupID string, expiresIn time.Duration) (int64, error) {
+func (m *FileDBManager) insertDeduplicationLogs(tx *sql.Tx, queue_info_id int64, dedupID string, expiresIn string) (int64, error) {
 	insertQuery :=
 		`INSERT INTO deduplication_log (queue_info_id, deduplication_id, expires_at)
-		VALUES (?, ?, ?)
+		VALUES (?, ?, DATETIME('now', ?))
 		ON CONFLICT(queue_info_id, deduplication_id) DO NOTHING;`
-	res, err := tx.Exec(insertQuery, queue_info_id, dedupID, time.Now().Add(expiresIn))
+	res, err := tx.Exec(insertQuery, queue_info_id, dedupID, expiresIn)
 	if err != nil {
 		return 0, fmt.Errorf("error inserting deduplication log: %w", err)
 	}

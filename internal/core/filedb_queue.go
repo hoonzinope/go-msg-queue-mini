@@ -153,18 +153,17 @@ func (q *fileDBQueue) _enqueueBatchPartialSuccess(queue_name string, items []int
 	successCount, insertFailedMessages, err := q.manager.WriteMessagesBatchWithMetaAndReturnFailed(queue_name, msgs, pid, delays, deduplicationIDs)
 	if err != nil {
 		q.logger.Error("Error writing batch messages to queue", "error", err)
-		// Mark insertFailedMessages as failed
-		for _, ifm := range insertFailedMessages {
-			failedMessages = append(failedMessages, internal.FailedMessage{
-				Index:   ifm.Index + startIndex,
-				Message: items[ifm.Index],
-				Reason:  ifm.Reason,
-			})
-		}
-		return successCount, failedMessages, err
+	}
+	// Mark insertFailedMessages as failed
+	for _, ifm := range insertFailedMessages {
+		failedMessages = append(failedMessages, internal.FailedMessage{
+			Index:   ifm.Index + startIndex,
+			Message: items[ifm.Index],
+			Reason:  ifm.Reason,
+		})
 	}
 	q.MQMetrics.EnqueueCounter.WithLabelValues(queue_name).Add(float64(successCount))
-	return successCount, failedMessages, nil
+	return successCount, failedMessages, err
 }
 
 func (q *fileDBQueue) EnqueueBatch(queue_name, mode string, enqMsg []internal.EnqueueMessage) (internal.BatchResult, error) {
@@ -222,15 +221,10 @@ func (q *fileDBQueue) EnqueueBatch(queue_name, mode string, enqMsg []internal.En
 			successCount, failedMessages, err := q._enqueueBatchPartialSuccess(queue_name, chunk, currentIndex, chunkedDelays[i], chunkedDedupIDs[i])
 			if err != nil {
 				q.logger.Error("Error enqueuing messages", "error", err)
-				// Mark all messages in this chunk as failed
-				for idx := range failedMessages {
-					failedMessages[idx].Index += currentIndex
-				}
-				returnFailedMessages = append(returnFailedMessages, failedMessages...)
 			} else {
 				totalSuccess += successCount
-				returnFailedMessages = append(returnFailedMessages, failedMessages...)
 			}
+			returnFailedMessages = append(returnFailedMessages, failedMessages...)
 			currentIndex += int64(len(chunk))
 		}
 		return internal.BatchResult{
