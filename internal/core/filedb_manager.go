@@ -127,6 +127,10 @@ func (m *FileDBManager) deleteInterval() error {
 		if deleteAckedErr != nil {
 			return deleteAckedErr
 		}
+		deleteExpiredDupLogErr := m.expireAllDeduplicationLogs(tx)
+		if deleteExpiredDupLogErr != nil {
+			return deleteExpiredDupLogErr
+		}
 		if deleteCnt > 0 || ackedCnt > 0 {
 			if _, err := tx.Exec(`PRAGMA incremental_vacuum(1);`); err != nil {
 				return err

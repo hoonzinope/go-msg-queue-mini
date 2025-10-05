@@ -52,6 +52,16 @@ func (m *FileDBManager) checkDuplicationID(tx *sql.Tx, queueInfoID int64, dedupI
 	return res, nil
 }
 
+// 전체 deduplication_log 중 만료된 로그 삭제
+func (m *FileDBManager) expireAllDeduplicationLogs(tx *sql.Tx) error {
+	_, err := tx.Exec(`
+		DELETE FROM deduplication_log
+		WHERE
+		expires_at <= CURRENT_TIMESTAMP;`,
+	)
+	return err
+}
+
 // expireDeduplicationLogs 만료된 deduplication_log 삭제
 func (m *FileDBManager) expireDeduplicationLogs(tx *sql.Tx, queue_info_id int64, dedupID string) error {
 	_, err := tx.Exec(`
