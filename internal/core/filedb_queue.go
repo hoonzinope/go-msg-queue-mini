@@ -172,15 +172,8 @@ func (q *fileDBQueue) EnqueueBatch(queue_name, mode string, enqMsg []internal.En
 	deduplicationIDs := make([]string, 0, len(enqMsg))
 	for _, em := range enqMsg {
 		items = append(items, em.Item)
-		if em.Delay == "" {
-			em.Delay = "0s"
-		}
 		delays = append(delays, em.Delay)
-		if em.DeduplicationID == "" {
-			deduplicationIDs = append(deduplicationIDs, "")
-		} else {
-			deduplicationIDs = append(deduplicationIDs, em.DeduplicationID)
-		}
+		deduplicationIDs = append(deduplicationIDs, em.DeduplicationID)
 	}
 
 	chunkedMsgs := util.ChunkSlice(items, 100) // Chunk size of 100

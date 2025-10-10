@@ -138,16 +138,6 @@ func TestEnqueueBatchHandlerSuccess(t *testing.T) {
 	if resp.SuccessCount != mq.enqueueBatchResult {
 		t.Fatalf("success count = %d, want %d", resp.SuccessCount, mq.enqueueBatchResult)
 	}
-
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("failed to unmarshal response: %v", err)
-	}
-	if resp.Status != "enqueued" {
-		t.Fatalf("response status = %s, want enqueued", resp.Status)
-	}
-	if resp.SuccessCount != mq.enqueueBatchResult {
-		t.Fatalf("success count = %d, want %d", resp.SuccessCount, mq.enqueueBatchResult)
-	}
 }
 
 func TestEnqueueBatchHandlerPartialSuccess(t *testing.T) {

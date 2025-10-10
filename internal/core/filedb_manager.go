@@ -303,7 +303,7 @@ func (m *FileDBManager) NackMessage(
 			return deliveryCntErr
 		}
 
-		if deliveryCount <= maxDeliveries {
+		if deliveryCount < maxDeliveries {
 			// 지수적 backoff 증가
 			backoffSec := int(backoff.Seconds())
 			if backoffSec < 1 {

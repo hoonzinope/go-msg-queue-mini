@@ -6,7 +6,7 @@ import (
 	"go-msg-queue-mini/internal/queue_error"
 )
 
-var expired_deduplication_log_cleanup_interval_seconds = 1 * 60 * 60 // 1 hour
+const expired_deduplication_log_cleanup_interval_seconds = 1 * 60 * 60 // 1 hour
 
 // create deduplication_log table
 func (m *FileDBManager) createDeduplicationLogTable() error {
@@ -54,11 +54,8 @@ func (m *FileDBManager) checkDuplicationID(tx *sql.Tx, queueInfoID int64, dedupI
 
 // 전체 deduplication_log 중 만료된 로그 삭제
 func (m *FileDBManager) expireAllDeduplicationLogs(tx *sql.Tx) error {
-	_, err := tx.Exec(`
-		DELETE FROM deduplication_log
-		WHERE
-		expires_at <= CURRENT_TIMESTAMP;`,
-	)
+	deleteQuery := `DELETE FROM deduplication_log WHERE expires_at <= CURRENT_TIMESTAMP;`
+	_, err := tx.Exec(deleteQuery)
 	return err
 }
 
@@ -111,9 +108,7 @@ func (m *FileDBManager) updateDeduplicationLogWithQueueRowID(tx *sql.Tx, log_id 
 
 // deleteDeduplicationLogs deduplication_log 삭제
 func (m *FileDBManager) deleteDeduplicationLogs(tx *sql.Tx, log_id int64) error {
-	deleteQuery := `
-		DELETE FROM deduplication_log
-		WHERE id = ?;`
+	deleteQuery := `DELETE FROM deduplication_log WHERE id = ?;`
 	_, err := tx.Exec(deleteQuery, log_id)
 	if err != nil {
 		return fmt.Errorf("error deleting deduplication log: %w", err)

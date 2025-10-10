@@ -192,6 +192,68 @@ func TestFileDBQueueEnqueueBatchPartialSuccessChunkError(t *testing.T) {
 	}
 }
 
+func TestFileDBQueueEnqueueBatchPartialSuccessDuplicate(t *testing.T) {
+	queue := newTestQueue(t)
+	queueName := "enqueue-batch-partial-success-duplicate"
+	createQueueOrFail(t, queue, queueName)
+
+	batch := []internal.EnqueueMessage{
+		{Item: "first-success", Delay: "0s", DeduplicationID: "dedup-shared"},
+		{Item: "duplicate-entry", Delay: "0s", DeduplicationID: "dedup-shared"},
+		{Item: map[string]interface{}{"payload": "second-success"}, Delay: "0s", DeduplicationID: "dedup-unique"},
+	}
+
+	result, err := queue.EnqueueBatch(queueName, "partialSuccess", batch)
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if result.SuccessCount != 2 {
+		t.Fatalf("success count = %d, want 2", result.SuccessCount)
+	}
+	if result.FailedCount != 1 {
+		t.Fatalf("failed count = %d, want 1", result.FailedCount)
+	}
+	if len(result.FailedMessages) != 1 {
+		t.Fatalf("failed messages len = %d, want 1", len(result.FailedMessages))
+	}
+
+	failed := result.FailedMessages[0]
+	if failed.Index != 1 {
+		t.Fatalf("failed index = %d, want 1", failed.Index)
+	}
+	msgStr, ok := failed.Message.(string)
+	if !ok {
+		t.Fatalf("failed message type = %T, want string", failed.Message)
+	}
+	if msgStr != "duplicate-entry" {
+		t.Fatalf("failed message = %s, want %s", msgStr, "duplicate-entry")
+	}
+	if !strings.Contains(failed.Reason, "duplicate message") {
+		t.Fatalf("failed reason = %s, want contains %q", failed.Reason, "duplicate message")
+	}
+
+	expected := []interface{}{
+		"first-success",
+		map[string]interface{}{"payload": "second-success"},
+	}
+	for idx, want := range expected {
+		msg, err := queue.Dequeue(queueName, "group-partial-dup", "consumer-partial-dup")
+		if err != nil {
+			t.Fatalf("dequeue failed at index %d: %v", idx, err)
+		}
+		if !reflect.DeepEqual(msg.Payload, want) {
+			t.Fatalf("payload = %#v, want %#v", msg.Payload, want)
+		}
+		if ackErr := queue.Ack(queueName, "group-partial-dup", msg.ID, msg.Receipt); ackErr != nil {
+			t.Fatalf("ack failed at index %d: %v", idx, ackErr)
+		}
+	}
+
+	if _, err := queue.Dequeue(queueName, "group-partial-dup", "consumer-partial-dup"); !errors.Is(err, queue_error.ErrEmpty) {
+		t.Fatalf("expected empty queue, got %v", err)
+	}
+}
+
 func TestFileDBQueueEnqueueDuplicateDedupID(t *testing.T) {
 	queue := newTestQueue(t)
 	queueName := "enqueue-duplicate-dedup-id"
