@@ -138,6 +138,7 @@ func (m *FileDBManager) insertMessageBatchStopOnFailure(
 			globalID := util.GenerateGlobalID()
 			res, insertErr := stmt.Exec(queueInfoID, msg, globalID, partitionID, mod)
 			if insertErr != nil {
+				m.deleteDeduplicationLogs(tx, logId) // 삽입 실패시 deduplication_log 삭제
 				return txCnt, insertErr
 			}
 			queue_row_id, err := res.LastInsertId()
