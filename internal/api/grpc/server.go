@@ -99,13 +99,17 @@ func (qs *queueServiceServer) Enqueue(ctx context.Context, req *EnqueueRequest) 
 		qs.Logger.Error("Error enqueuing message", "error", "queue name is required")
 		return nil, fmt.Errorf("queue name is required")
 	}
-	delay := req.GetDelay()
 	message := req.GetMessage()
-	if err := qs.Queue.Enqueue(queue_name, message, delay); err != nil {
+	enqueueMsg := internal.EnqueueMessage{
+		Item:            message.GetMessage(),
+		Delay:           message.GetDelay(),
+		DeduplicationID: message.GetDeduplicationId(),
+	}
+	if err := qs.Queue.Enqueue(queue_name, enqueueMsg); err != nil {
 		qs.Logger.Error("Error enqueuing message", "error", err)
 		return nil, err
 	}
-	return &EnqueueResponse{Status: "ok", Message: message}, nil
+	return &EnqueueResponse{Status: "ok", QueueName: queue_name, Message: message.GetMessage()}, nil
 }
 
 func (qs *queueServiceServer) EnqueueBatch(ctx context.Context, req *EnqueueBatchRequest) (res *EnqueueBatchResponse, err error) {
@@ -120,18 +124,21 @@ func (qs *queueServiceServer) EnqueueBatch(ctx context.Context, req *EnqueueBatc
 		qs.Logger.Error("Error enqueuing messages", "error", "invalid mode")
 		return nil, fmt.Errorf("invalid mode")
 	}
-	delay := req.GetDelay()
 	messages := req.GetMessages()
 	if len(messages) == 0 {
 		qs.Logger.Error("Error enqueuing messages", "error", "messages are required")
 		return nil, fmt.Errorf("messages are required")
 	}
-	msgs := make([]interface{}, len(messages))
+	msgs := make([]internal.EnqueueMessage, len(messages))
 	for i, msg := range messages {
-		msgs[i] = msg
+		msgs[i] = internal.EnqueueMessage{
+			Item:            msg.GetMessage(),
+			Delay:           msg.GetDelay(),
+			DeduplicationID: msg.GetDeduplicationId(),
+		}
 	}
 
-	batchResult, err := qs.Queue.EnqueueBatch(queue_name, mode, delay, msgs)
+	batchResult, err := qs.Queue.EnqueueBatch(queue_name, mode, msgs)
 	if err != nil {
 		qs.Logger.Error("Error enqueuing messages", "error", err)
 		return nil, err

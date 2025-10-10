@@ -97,12 +97,18 @@ func (q *fileDBQueue) DeleteQueue(queue_name string) error {
 	return q.manager.DeleteQueue(queue_name)
 }
 
-func (q *fileDBQueue) Enqueue(queue_name string, item interface{}, delay string) error {
+func (q *fileDBQueue) Enqueue(queue_name string, enqMsg internal.EnqueueMessage) error {
+	item := enqMsg.Item
+	delay := enqMsg.Delay
+	deduplicationID := enqMsg.DeduplicationID
+
 	msg, err := json.Marshal(item)
 	if err != nil {
 		return err
 	}
-	if err := q.manager.WriteMessage(queue_name, msg, delay); err != nil {
+	gid := util.GenerateGlobalID()
+	pid := 0
+	if err := q.manager.WriteMessage(queue_name, msg, gid, pid, delay, deduplicationID); err != nil {
 		q.logger.Error("Error writing message to queue", "error", err)
 		return err
 	}
@@ -110,7 +116,7 @@ func (q *fileDBQueue) Enqueue(queue_name string, item interface{}, delay string)
 	return nil
 }
 
-func (q *fileDBQueue) _enqueueBatchStopOnFailure(queue_name string, items []interface{}, delay string) (int64, error) {
+func (q *fileDBQueue) _enqueueBatchStopOnFailure(queue_name string, items []interface{}, delays []string, deduplicationIDs []string) (int64, error) {
 	var successCount int64 = 0
 	msgs := make([][]byte, 0, len(items))
 	for _, item := range items {
@@ -122,7 +128,7 @@ func (q *fileDBQueue) _enqueueBatchStopOnFailure(queue_name string, items []inte
 		msgs = append(msgs, msg)
 	}
 	pid := 0
-	successCount, err := q.manager.WriteMessagesBatchWithMeta(queue_name, msgs, pid, delay)
+	successCount, err := q.manager.WriteMessagesBatchWithMeta(queue_name, msgs, pid, delays, deduplicationIDs)
 	if err != nil {
 		q.logger.Error("Error writing batch messages to queue", "error", err)
 		return successCount, err
@@ -131,7 +137,7 @@ func (q *fileDBQueue) _enqueueBatchStopOnFailure(queue_name string, items []inte
 	return successCount, nil
 }
 
-func (q *fileDBQueue) _enqueueBatchPartialSuccess(queue_name string, items []interface{}, startIndex int64, delay string) (int64, []internal.FailedMessage, error) {
+func (q *fileDBQueue) _enqueueBatchPartialSuccess(queue_name string, items []interface{}, startIndex int64, delays []string, deduplicationIDs []string) (int64, []internal.FailedMessage, error) {
 	var successCount int64 = 0
 	var failedMessages []internal.FailedMessage
 	msgs := make([][]byte, 0, len(items))
@@ -144,32 +150,42 @@ func (q *fileDBQueue) _enqueueBatchPartialSuccess(queue_name string, items []int
 		msgs = append(msgs, msg)
 	}
 	pid := 0
-	successCount, insertFailedMessages, err := q.manager.WriteMessagesBatchWithMetaAndReturnFailed(queue_name, msgs, pid, delay)
+	successCount, insertFailedMessages, err := q.manager.WriteMessagesBatchWithMetaAndReturnFailed(queue_name, msgs, pid, delays, deduplicationIDs)
 	if err != nil {
 		q.logger.Error("Error writing batch messages to queue", "error", err)
-		// Mark insertFailedMessages as failed
-		for _, ifm := range insertFailedMessages {
-			failedMessages = append(failedMessages, internal.FailedMessage{
-				Index:   ifm.Index + startIndex,
-				Message: items[ifm.Index],
-				Reason:  ifm.Reason,
-			})
-		}
-		return successCount, failedMessages, err
+	}
+	// Mark insertFailedMessages as failed
+	for _, ifm := range insertFailedMessages {
+		failedMessages = append(failedMessages, internal.FailedMessage{
+			Index:   ifm.Index + startIndex,
+			Message: items[ifm.Index],
+			Reason:  ifm.Reason,
+		})
 	}
 	q.MQMetrics.EnqueueCounter.WithLabelValues(queue_name).Add(float64(successCount))
-	return successCount, failedMessages, nil
+	return successCount, failedMessages, err
 }
 
-func (q *fileDBQueue) EnqueueBatch(queue_name, mode, delay string, items []interface{}) (internal.BatchResult, error) {
+func (q *fileDBQueue) EnqueueBatch(queue_name, mode string, enqMsg []internal.EnqueueMessage) (internal.BatchResult, error) {
+	items := make([]interface{}, 0, len(enqMsg))
+	delays := make([]string, 0, len(enqMsg))
+	deduplicationIDs := make([]string, 0, len(enqMsg))
+	for _, em := range enqMsg {
+		items = append(items, em.Item)
+		delays = append(delays, em.Delay)
+		deduplicationIDs = append(deduplicationIDs, em.DeduplicationID)
+	}
+
 	chunkedMsgs := util.ChunkSlice(items, 100) // Chunk size of 100
+	chunkedDelays := util.ChunkSlice(delays, 100)
+	chunkedDedupIDs := util.ChunkSlice(deduplicationIDs, 100)
 	var totalSuccess int64 = 0
 	var stopError error = nil
 	var failedMessages []internal.FailedMessage
 	switch mode {
 	case "stopOnFailure":
-		for _, chunk := range chunkedMsgs {
-			successCount, err := q._enqueueBatchStopOnFailure(queue_name, chunk, delay)
+		for i, chunk := range chunkedMsgs {
+			successCount, err := q._enqueueBatchStopOnFailure(queue_name, chunk, chunkedDelays[i], chunkedDedupIDs[i])
 			if err != nil {
 				q.logger.Error("Error enqueuing messages", "error", err)
 				return internal.BatchResult{
@@ -194,19 +210,14 @@ func (q *fileDBQueue) EnqueueBatch(queue_name, mode, delay string, items []inter
 		returnFailedMessages := []internal.FailedMessage{}
 		currentIndex := int64(0)
 		// Track the current index across chunks
-		for _, chunk := range chunkedMsgs {
-			successCount, failedMessages, err := q._enqueueBatchPartialSuccess(queue_name, chunk, currentIndex, delay)
+		for i, chunk := range chunkedMsgs {
+			successCount, failedMessages, err := q._enqueueBatchPartialSuccess(queue_name, chunk, currentIndex, chunkedDelays[i], chunkedDedupIDs[i])
 			if err != nil {
 				q.logger.Error("Error enqueuing messages", "error", err)
-				// Mark all messages in this chunk as failed
-				for idx := range failedMessages {
-					failedMessages[idx].Index += currentIndex
-				}
-				returnFailedMessages = append(returnFailedMessages, failedMessages...)
 			} else {
 				totalSuccess += successCount
-				returnFailedMessages = append(returnFailedMessages, failedMessages...)
 			}
+			returnFailedMessages = append(returnFailedMessages, failedMessages...)
 			currentIndex += int64(len(chunk))
 		}
 		return internal.BatchResult{
@@ -228,7 +239,8 @@ func (q *fileDBQueue) Dequeue(queue_name, consumer_group string, consumer_id str
 		ID:      -1,
 		Receipt: "",
 	}
-	msg, err := q.manager.ReadMessage(queue_name, consumer_group, consumer_id, int(q.leaseDuration.Seconds()))
+	partitionID := 0
+	msg, err := q.manager.ReadMessage(queue_name, consumer_group, partitionID, consumer_id, int(q.leaseDuration.Seconds()))
 	if err != nil {
 		switch err {
 		case queue_error.ErrEmpty:
@@ -299,7 +311,8 @@ func (q *fileDBQueue) Status(queue_name string) (internal.QueueStatus, error) {
 
 // bellow new api for http, gRPC
 func (q *fileDBQueue) Peek(queue_name, group_name string) (internal.QueueMessage, error) {
-	msg, err := q.manager.PeekMessage(queue_name, group_name)
+	partitionID := 0
+	msg, err := q.manager.PeekMessage(queue_name, group_name, partitionID)
 	if err != nil {
 		if errors.Is(err, queue_error.ErrEmpty) {
 			return internal.QueueMessage{}, err

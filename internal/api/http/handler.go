@@ -3,6 +3,7 @@ package http
 import (
 	"encoding/json"
 	"errors"
+	"go-msg-queue-mini/internal"
 	"go-msg-queue-mini/internal/queue_error"
 	"net/http"
 
@@ -67,7 +68,12 @@ func (h *httpServerInstance) enqueueHandler(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request payload"})
 		return
 	}
-	err := h.Queue.Enqueue(queue_name, req.Message, req.Delay)
+	enqueueMsg := internal.EnqueueMessage{
+		Item:            req.Message,
+		Delay:           req.Delay,
+		DeduplicationID: req.DeduplicationID,
+	}
+	err := h.Queue.Enqueue(queue_name, enqueueMsg)
 	if err != nil {
 		h.Logger.Error("Error enqueuing message", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to enqueue message"})
@@ -101,14 +107,16 @@ func (h *httpServerInstance) enqueueBatchHandler(c *gin.Context) {
 		return
 	}
 
-	delay := req.Delay
-
-	msgs := make([]interface{}, len(req.Messages))
+	msgs := make([]internal.EnqueueMessage, len(req.Messages))
 	for i, msg := range req.Messages {
-		msgs[i] = msg
+		msgs[i] = internal.EnqueueMessage{
+			Item:            msg.Message,
+			Delay:           msg.Delay,
+			DeduplicationID: msg.DeduplicationID,
+		}
 	}
 
-	batchResult, err := h.Queue.EnqueueBatch(queue_name, mode, delay, msgs)
+	batchResult, err := h.Queue.EnqueueBatch(queue_name, mode, msgs)
 	if err != nil {
 		h.Logger.Error("Error enqueuing messages", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to enqueue messages"})
