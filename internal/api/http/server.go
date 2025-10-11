@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"go-msg-queue-mini/internal"
+	"go-msg-queue-mini/ui"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"sync"
@@ -33,6 +35,7 @@ type httpServerInstance struct {
 	ApiKey  string
 	limiter RateLimiter
 	Logger  *slog.Logger
+	uiFS    http.FileSystem
 }
 
 func StartServer(
@@ -50,12 +53,18 @@ func StartServer(
 		burst:   config.HTTP.Rate.Burst,
 	}
 
+	sub, subFSerr := fs.Sub(ui.StaticFiles, "static")
+	if subFSerr != nil {
+		return fmt.Errorf("failed to create sub filesystem: %w", subFSerr)
+	}
+
 	httpServerInstance := &httpServerInstance{
 		Addr:    fmt.Sprintf(":%d", addr),
 		Queue:   queue,
 		ApiKey:  config.HTTP.Auth.APIKey,
 		limiter: rateLimiter,
 		Logger:  logger,
+		uiFS:    http.FS(sub),
 	}
 
 	server := &http.Server{
@@ -81,11 +90,17 @@ func StartServer(
 }
 
 func router(httpServerInstance *httpServerInstance) *gin.Engine {
-	r := gin.Default()
+	r := gin.New()
+	r.RedirectTrailingSlash = false
+	r.RedirectFixedPath = false
+	r.Use(gin.Recovery())
 	r.Use(LoggerMiddleware())
 	r.Use(ErrorHandlingMiddleware())
 	r.Use(RequestIDMiddleware())
 	r.Use(RateLimitMiddleware(httpServerInstance.limiter, 1))
+
+	r.StaticFS("/static", httpServerInstance.uiFS)
+	r.GET("/", httpServerInstance.uiHandler)
 
 	r.GET("/metrics", gin.WrapH(promhttp.Handler()))
 	r.GET("/health", healthCheckHandler)

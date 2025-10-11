@@ -8,7 +8,7 @@ persistence:
 max-retry: 3 # Maximum number of retries for message processing
 retry-interval: 1s # Interval between retries
 lease-duration: 30s # Duration for message lease
-debug: true # Enable debug mode
+debug: false # Enable debug mode
 
 http:
   enabled: true
