@@ -93,6 +93,7 @@ func router(httpServerInstance *httpServerInstance) *gin.Engine {
 	r := gin.New()
 	r.RedirectTrailingSlash = false
 	r.RedirectFixedPath = false
+	r.Use(gin.Recovery())
 	r.Use(LoggerMiddleware())
 	r.Use(ErrorHandlingMiddleware())
 	r.Use(RequestIDMiddleware())

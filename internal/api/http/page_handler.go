@@ -10,7 +10,7 @@ import (
 func (h *httpServerInstance) uiHandler(c *gin.Context) {
 	f, err := h.uiFS.Open("index.html") // h.uiFS = http.FS(sub) with sub = fs.Sub(embedded, "static")
 	if err != nil {
-		c.String(http.StatusInternalServerError, "index.html not found: %v", err)
+		c.String(http.StatusInternalServerError, "internal server error")
 		return
 	}
 	defer f.Close()
