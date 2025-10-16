@@ -57,8 +57,9 @@ func StartServer(ctx context.Context, config *internal.Config, queue internal.Qu
 
 func NewQueueServiceServer(queue internal.Queue, logger *slog.Logger) *queueServiceServer {
 	return &queueServiceServer{
-		Queue:  queue,
-		Logger: logger,
+		Queue:          queue,
+		QueueInspector: queue.(internal.QueueInspector),
+		Logger:         logger,
 	}
 }
 
@@ -257,7 +258,7 @@ func (qs *queueServiceServer) StatusAll(ctx context.Context, req *EmptyRequest) 
 	allQueueStatuses := make(map[string]*QueueStatus)
 	for queueName, status := range statusMap {
 		allQueueStatuses[queueName] = &QueueStatus{
-			QueueName:        status.QueueName,
+			QueueName:        queueName,
 			TotalMessages:    status.TotalMessages,
 			AckedMessages:    status.AckedMessages,
 			InflightMessages: status.InflightMessages,

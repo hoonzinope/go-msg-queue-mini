@@ -110,7 +110,6 @@ func router(httpServerInstance *httpServerInstance) *gin.Engine {
 	reader_no_queue_name := r.Group("/api/v1")
 	{
 		reader_no_queue_name.GET("/status/all", httpServerInstance.statusAllHandler)
-		reader_no_queue_name.GET("/health", healthCheckHandler)
 	}
 
 	reader := r.Group("/api/v1")
