@@ -333,3 +333,61 @@ func TestFileDBQueueEnqueueBatchStopOnFailureDuplicate(t *testing.T) {
 		t.Fatalf("expected no new messages for same group, got %v", err)
 	}
 }
+
+func TestFileDBQueueStatusAll(t *testing.T) {
+	queue := newTestQueue(t)
+	dataQueue := "status-all-primary"
+	emptyQueue := "status-all-empty"
+
+	createQueueOrFail(t, queue, dataQueue)
+	createQueueOrFail(t, queue, emptyQueue)
+
+	err := queue.Enqueue(dataQueue, internal.EnqueueMessage{
+		Item:            map[string]interface{}{"payload": "value"},
+		Delay:           "0s",
+		DeduplicationID: "status-dedup-1",
+	})
+	if err != nil {
+		t.Fatalf("enqueue returned error: %v", err)
+	}
+
+	statusMap, err := queue.StatusAll()
+	if err != nil {
+		t.Fatalf("statusAll returned error: %v", err)
+	}
+
+	if len(statusMap) != 2 {
+		t.Fatalf("status map length = %d, want 2", len(statusMap))
+	}
+
+	dataStatus, ok := statusMap[dataQueue]
+	if !ok {
+		t.Fatalf("expected status for queue %s", dataQueue)
+	}
+	if dataStatus.QueueType != "memory" {
+		t.Fatalf("queue type = %s, want memory", dataStatus.QueueType)
+	}
+	if dataStatus.TotalMessages != 1 {
+		t.Fatalf("total messages = %d, want 1", dataStatus.TotalMessages)
+	}
+	if dataStatus.AckedMessages != 0 {
+		t.Fatalf("acked messages = %d, want 0", dataStatus.AckedMessages)
+	}
+	if dataStatus.InflightMessages != 0 {
+		t.Fatalf("inflight messages = %d, want 0", dataStatus.InflightMessages)
+	}
+	if dataStatus.DLQMessages != 0 {
+		t.Fatalf("dlq messages = %d, want 0", dataStatus.DLQMessages)
+	}
+
+	emptyStatus, ok := statusMap[emptyQueue]
+	if !ok {
+		t.Fatalf("expected status for queue %s", emptyQueue)
+	}
+	if emptyStatus.TotalMessages != 0 {
+		t.Fatalf("empty queue total messages = %d, want 0", emptyStatus.TotalMessages)
+	}
+	if emptyStatus.QueueType != "memory" {
+		t.Fatalf("empty queue type = %s, want memory", emptyStatus.QueueType)
+	}
+}

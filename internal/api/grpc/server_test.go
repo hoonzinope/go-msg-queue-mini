@@ -68,6 +68,21 @@ func newTestGRPCServer(queue internal.Queue) *queueServiceServer {
 	return NewQueueServiceServer(queue, logger)
 }
 
+type mockQueueInspector struct {
+	statusResult    internal.QueueStatus
+	statusError     error
+	statusAllResult map[string]internal.QueueStatus
+	statusAllError  error
+}
+
+func (m *mockQueueInspector) Status(string) (internal.QueueStatus, error) {
+	return m.statusResult, m.statusError
+}
+
+func (m *mockQueueInspector) StatusAll() (map[string]internal.QueueStatus, error) {
+	return m.statusAllResult, m.statusAllError
+}
+
 func TestQueueServiceEnqueueBatchSuccess(t *testing.T) {
 	mq := &mockQueue{enqueueBatchResult: 2}
 	server := newTestGRPCServer(mq)
@@ -219,5 +234,71 @@ func TestQueueServiceEnqueueBatchQueueError(t *testing.T) {
 	}
 	if len(mq.enqueueBatchCalls) != 1 {
 		t.Fatalf("enqueue batch call count = %d, want 1", len(mq.enqueueBatchCalls))
+	}
+}
+
+func TestQueueServiceStatusAllSuccess(t *testing.T) {
+	mq := &mockQueue{}
+	inspector := &mockQueueInspector{
+		statusAllResult: map[string]internal.QueueStatus{
+			"alpha": {
+				QueueType:        "memory",
+				QueueName:        "alpha",
+				TotalMessages:    5,
+				AckedMessages:    2,
+				InflightMessages: 1,
+				DLQMessages:      2,
+			},
+			"beta": {
+				QueueType:        "memory",
+				QueueName:        "beta",
+				TotalMessages:    0,
+				AckedMessages:    0,
+				InflightMessages: 0,
+				DLQMessages:      0,
+			},
+		},
+	}
+	server := newTestGRPCServer(mq)
+	server.QueueInspector = inspector
+
+	resp, err := server.StatusAll(context.Background(), &EmptyRequest{})
+	if err != nil {
+		t.Fatalf("statusAll returned error: %v", err)
+	}
+	if resp.GetStatus() != "ok" {
+		t.Fatalf("response status = %s, want ok", resp.GetStatus())
+	}
+
+	queueStatuses := resp.GetQueueStatuses()
+	if len(queueStatuses) != 2 {
+		t.Fatalf("queue statuses length = %d, want 2", len(queueStatuses))
+	}
+	alphaStatus, ok := queueStatuses["alpha"]
+	if !ok {
+		t.Fatalf("missing alpha status in response")
+	}
+	if alphaStatus.GetTotalMessages() != 5 || alphaStatus.GetAckedMessages() != 2 || alphaStatus.GetInflightMessages() != 1 || alphaStatus.GetDlqMessages() != 2 {
+		t.Fatalf("unexpected alpha status: %#v", alphaStatus)
+	}
+}
+
+func TestQueueServiceStatusAllError(t *testing.T) {
+	mq := &mockQueue{}
+	inspector := &mockQueueInspector{
+		statusAllError: errors.New("boom"),
+	}
+	server := newTestGRPCServer(mq)
+	server.QueueInspector = inspector
+
+	resp, err := server.StatusAll(context.Background(), &EmptyRequest{})
+	if err == nil {
+		t.Fatalf("expected error from statusAll")
+	}
+	if resp != nil {
+		t.Fatalf("expected nil response on error")
+	}
+	if !errors.Is(err, inspector.statusAllError) {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }

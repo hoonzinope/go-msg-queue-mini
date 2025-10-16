@@ -305,10 +305,6 @@ func (q *fileDBQueue) Shutdown() error {
 	return nil
 }
 
-func (q *fileDBQueue) Status(queue_name string) (internal.QueueStatus, error) {
-	return q.manager.GetStatus(queue_name)
-}
-
 // bellow new api for http, gRPC
 func (q *fileDBQueue) Peek(queue_name, group_name string) (internal.QueueMessage, error) {
 	partitionID := 0
@@ -359,4 +355,21 @@ func (q *fileDBQueue) statusMetrics() {
 		q.MQMetrics.InFlightMessages.WithLabelValues(status.QueueName).Set(float64(status.InflightMessages))
 		q.MQMetrics.DLQMessages.WithLabelValues(status.QueueName).Set(float64(status.DLQMessages))
 	}
+}
+
+// implements QueueInspector interface
+func (q *fileDBQueue) Status(queue_name string) (internal.QueueStatus, error) {
+	return q.manager.GetStatus(queue_name)
+}
+
+func (q *fileDBQueue) StatusAll() (map[string]internal.QueueStatus, error) {
+	statuses, err := q.manager.GetAllStatus()
+	if err != nil {
+		return nil, err
+	}
+	statusMap := make(map[string]internal.QueueStatus)
+	for _, status := range statuses {
+		statusMap[status.QueueName] = status
+	}
+	return statusMap, nil
 }

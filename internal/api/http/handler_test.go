@@ -65,6 +65,23 @@ func (m *mockQueue) Peek(string, string) (internal.QueueMessage, error) {
 
 func (m *mockQueue) Renew(string, string, int64, string, int) error { return nil }
 
+type mockQueueInspector struct {
+	statusResult    internal.QueueStatus
+	statusError     error
+	statusAllResult map[string]internal.QueueStatus
+	statusAllError  error
+	callStatusAll   int
+}
+
+func (m *mockQueueInspector) Status(string) (internal.QueueStatus, error) {
+	return m.statusResult, m.statusError
+}
+
+func (m *mockQueueInspector) StatusAll() (map[string]internal.QueueStatus, error) {
+	m.callStatusAll++
+	return m.statusAllResult, m.statusAllError
+}
+
 func newTestHTTPServer(queue internal.Queue) *httpServerInstance {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	return &httpServerInstance{Queue: queue, Logger: logger}
@@ -264,5 +281,94 @@ func TestEnqueueBatchHandlerQueueError(t *testing.T) {
 	}
 	if len(mq.enqueueBatchCalls) != 1 {
 		t.Fatalf("enqueue batch call count = %d, want 1", len(mq.enqueueBatchCalls))
+	}
+}
+
+func TestStatusAllHandlerSuccess(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	mq := &mockQueue{}
+	inspector := &mockQueueInspector{
+		statusAllResult: map[string]internal.QueueStatus{
+			"alpha": {
+				QueueType:        "memory",
+				QueueName:        "alpha",
+				TotalMessages:    3,
+				AckedMessages:    1,
+				InflightMessages: 1,
+				DLQMessages:      1,
+			},
+			"beta": {
+				QueueType:        "memory",
+				QueueName:        "beta",
+				TotalMessages:    0,
+				AckedMessages:    0,
+				InflightMessages: 0,
+				DLQMessages:      0,
+			},
+		},
+	}
+	server := newTestHTTPServer(mq)
+	server.QueueInspector = inspector
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/status/all", nil)
+	c.Request = req
+
+	server.statusAllHandler(c)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
+	}
+
+	var resp StatusAllResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to unmarshal response: %v", err)
+	}
+	if resp.Status != "ok" {
+		t.Fatalf("response status = %s, want ok", resp.Status)
+	}
+	if len(resp.AllQueueMap) != 2 {
+		t.Fatalf("all queue map length = %d, want 2", len(resp.AllQueueMap))
+	}
+
+	alphaStatus, ok := resp.AllQueueMap["alpha"]
+	if !ok {
+		t.Fatalf("expected alpha queue status in response")
+	}
+	if alphaStatus.TotalMessages != 3 || alphaStatus.AckedMessages != 1 || alphaStatus.InflightMessages != 1 || alphaStatus.DLQMessages != 1 {
+		t.Fatalf("unexpected alpha status: %#v", alphaStatus)
+	}
+}
+
+func TestStatusAllHandlerError(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	mq := &mockQueue{}
+	inspector := &mockQueueInspector{
+		statusAllError: errors.New("boom"),
+	}
+	server := newTestHTTPServer(mq)
+	server.QueueInspector = inspector
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/status/all", nil)
+	c.Request = req
+
+	server.statusAllHandler(c)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusInternalServerError)
+	}
+
+	var resp map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to unmarshal response: %v", err)
+	}
+	if resp["error"] != "failed to get all queue status" {
+		t.Fatalf("error message = %s, want failed to get all queue status", resp["error"])
+	}
+	if inspector.callStatusAll != 1 {
+		t.Fatalf("StatusAll call count = %d, want 1", inspector.callStatusAll)
 	}
 }

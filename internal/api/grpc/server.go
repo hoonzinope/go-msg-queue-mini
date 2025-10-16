@@ -13,6 +13,7 @@ import (
 type queueServiceServer struct {
 	UnimplementedQueueServiceServer
 	internal.Queue
+	internal.QueueInspector
 	Logger *slog.Logger
 }
 
@@ -228,7 +229,7 @@ func (qs *queueServiceServer) Renew(ctx context.Context, req *RenewRequest) (res
 
 func (qs *queueServiceServer) Status(ctx context.Context, req *StatusRequest) (res *StatusResponse, err error) {
 	// Check the status of the queue
-	status, err := qs.Queue.Status(req.QueueName)
+	status, err := qs.QueueInspector.Status(req.QueueName)
 	if err != nil {
 		qs.Logger.Error("Error getting queue status", "error", err)
 		return nil, err
@@ -243,5 +244,28 @@ func (qs *queueServiceServer) Status(ctx context.Context, req *StatusRequest) (r
 	return &StatusResponse{
 		Status:      "ok",
 		QueueStatus: queueStatus,
+	}, nil
+}
+
+func (qs *queueServiceServer) StatusAll(ctx context.Context, req *EmptyRequest) (res *StatusAllResponse, err error) {
+	// Check the status of all queues
+	statusMap, err := qs.QueueInspector.StatusAll()
+	if err != nil {
+		qs.Logger.Error("Error getting all queue statuses", "error", err)
+		return nil, err
+	}
+	allQueueStatuses := make(map[string]*QueueStatus)
+	for queueName, status := range statusMap {
+		allQueueStatuses[queueName] = &QueueStatus{
+			QueueName:        status.QueueName,
+			TotalMessages:    status.TotalMessages,
+			AckedMessages:    status.AckedMessages,
+			InflightMessages: status.InflightMessages,
+			DlqMessages:      status.DLQMessages,
+		}
+	}
+	return &StatusAllResponse{
+		Status:        "ok",
+		QueueStatuses: allQueueStatuses,
 	}, nil
 }
