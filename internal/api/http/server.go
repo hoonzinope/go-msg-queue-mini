@@ -107,10 +107,15 @@ func router(httpServerInstance *httpServerInstance) *gin.Engine {
 	r.GET("/metrics", gin.WrapH(promhttp.Handler()))
 	r.GET("/health", healthCheckHandler)
 
+	reader_no_queue_name := r.Group("/api/v1")
+	{
+		reader_no_queue_name.GET("/status/all", httpServerInstance.statusAllHandler)
+		reader_no_queue_name.GET("/health", healthCheckHandler)
+	}
+
 	reader := r.Group("/api/v1")
 	reader.Use(queueNameMiddleware())
 	{
-		reader.GET("/status/all", httpServerInstance.statusAllHandler)
 		reader.GET("/:queue_name/status", httpServerInstance.statusHandler)
 		reader.POST("/:queue_name/peek", httpServerInstance.peekHandler)
 	}
