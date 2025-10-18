@@ -147,8 +147,6 @@ td.dlq-high {
   color: #000;
 }
 
-/* ====== dlq messages red ====== */
-td.dlq-messages-cell {
-  color: #c0392b;
-  font-weight: 600;
+.hidden {
+  display: none;
 }

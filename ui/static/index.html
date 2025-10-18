@@ -13,18 +13,18 @@
     <div id="controls">
         <button id="create-queue-button">Create Queue</button>
         <button id="refresh-status-button">Refresh Status</button>
-        <!-- <div id="search" style="display: inline-block; margin-left: 20px;">
-            <input type="text" id="search-input" placeholder="Search Queues">
-            <button id="search-button">Search</button>
-        </div> -->
+        <!-- todo : Search functionality -->
     </div>
     
 
-    <div id="create-queue-modal" class="modal" style="display: none;">
+    <div id="create-queue-modal" class="modal hidden">
         <div class="modal-content">
             <span class="close-button" id="close-create-queue">&times;</span>
             <h2>Create New Queue</h2>
             <input type="text" id="new-queue-name" placeholder="Queue Name">
+            <br>
+            <input type="text" id="api-key-input" placeholder="API Key">
+            <br>
             <button id="submit-create-queue">Create</button>
         </div>
     </div>

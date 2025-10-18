@@ -1,23 +1,43 @@
 (function() {
     
     document.addEventListener('DOMContentLoaded', function() {
-        renderQueueTable();
+        callStatusAndRenderQueueTable();
 
         document.getElementById('create-queue-button').addEventListener('click', openCreateQueueModal);
         document.getElementById('submit-create-queue').addEventListener('click', createQueue);
         document.getElementById('close-create-queue').addEventListener('click', closeCreateQueueModal);
-        document.getElementById('refresh-status-button').addEventListener('click', refreshQueueStatus);
+        document.getElementById('refresh-status-button').addEventListener('click', callStatusAndRenderQueueTable);
 
         intervalRefresh();
     });
 
     function intervalRefresh() {
-        setInterval(refreshQueueStatus, 5000); // Refresh every 5 seconds
+        setTimeout(() => {
+            fetch('/api/v1/status/all')
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('Network response was not ok ' + response.statusText);
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    drawTbody(data);
+                })
+                .catch(error => {
+                    console.error('Error fetching status all:', error);
+                })
+                .finally(() => intervalRefresh());
+        }, 5000); // Refresh every 5 seconds
     }
 
-    function renderQueueTable() {
+    function callStatusAndRenderQueueTable() {
         fetch('/api/v1/status/all')
-            .then(response => response.json())
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('Network response was not ok ' + response.statusText);
+                }
+                return response.json();
+            })
             .then(data => {
                 drawTbody(data);
             })
@@ -28,20 +48,33 @@
 
     function openCreateQueueModal() {
         const modal = document.getElementById('create-queue-modal');
-        modal.style.display = 'block';
+        modal.classList.remove('hidden');
     }
 
     function createQueue() {
-        const queueName = document.getElementById('new-queue-name').value;
+        let queueName = document.getElementById('new-queue-name').value;
+        let apiKey = document.getElementById('api-key-input').value;
+        queueName = encodeURIComponent(queueName.trim());
+        apiKey = encodeURIComponent(apiKey.trim());
+        console.log('Creating queue:', queueName, 'with API Key:', apiKey);
+        if (!queueName || queueName.length === 0 || queueName === '') {
+            alert('Queue name cannot be empty.');
+            return;
+        }
+
         fetch('/api/v1/'+queueName+'/create', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                "X-API-KEY": "secret_api_key"
+                'X-API-KEY': apiKey
             },
-            //body: JSON.stringify({ name: queueName })
         })
-        .then(response => response.json())
+        .then(response => {
+            if (!response.ok) {
+                throw new Error('Network response was not ok ' + response.statusText);
+            }
+            return response.json();
+        })
         .then(data => {
             console.log('Create Queue Response:', data);
             if(data.error) {
@@ -51,7 +84,7 @@
             alert('Queue created successfully! ' + queueName);
             // Close the modal and refresh the queue status
             closeCreateQueueModal();
-            refreshQueueStatus();
+            callStatusAndRenderQueueTable();
         })
         .catch(error => {
             console.error('Error creating queue:', error);
@@ -61,23 +94,14 @@
 
     function closeCreateQueueModal() {
         const modal = document.getElementById('create-queue-modal');
-        modal.style.display = 'none';
-    }
-
-    function refreshQueueStatus() {
-        fetch('/api/v1/status/all')
-            .then(response => response.json())
-            .then(data => {
-                drawTbody(data);
-            })
-            .catch(error => {
-                console.error('Error fetching status all:', error);
-            });
+        modal.classList.add('hidden');
+        document.getElementById('new-queue-name').value = '';
     }
 
     function drawTbody(data) {
         const tbody = document.getElementById('queue-status-body');
-        tbody.innerHTML = ''; // Clear existing rows
+        const newTbody = document.createElement('tbody');
+        newTbody.id = 'queue-status-body';
 
         for (const [queueName, queueStatus] of Object.entries(data.all_queue_map)) {
             const row = document.createElement('tr');
@@ -100,10 +124,11 @@
 
             const dlqMessagesCell = document.createElement('td');
             dlqMessagesCell.textContent = queueStatus.dlq_messages;
-            dlqMessagesCell.classList.add('dlq-messages-cell');
+            dlqMessagesCell.classList.add('dlq-high');
             row.appendChild(dlqMessagesCell);
 
-            tbody.appendChild(row);
+            newTbody.appendChild(row);
         }   
+        tbody.replaceWith(newTbody);
     }
 })();
