@@ -29,10 +29,8 @@
 
     function createQueue() {
         let queueName = document.getElementById('new-queue-name').value;
-        let apiKey = document.getElementById('api-key-input').value;
+        let apiKey = document.getElementById('api-key-input').value.trim();
         queueName = encodeURIComponent(queueName.trim());
-        apiKey = encodeURIComponent(apiKey.trim());
-        console.log('Creating queue:', queueName, 'with API Key:', apiKey);
         if (!queueName || queueName.length === 0 || queueName === '') {
             alert('Queue name cannot be empty.');
             return;
