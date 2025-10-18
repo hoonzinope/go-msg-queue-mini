@@ -1,14 +1,5 @@
 package internal
 
-type QueueStatus struct {
-	QueueType        string
-	QueueName        string
-	TotalMessages    int64
-	AckedMessages    int64
-	InflightMessages int64
-	DLQMessages      int64
-}
-
 type QueueMessage struct {
 	Payload interface{}
 	ID      int64
@@ -42,7 +33,6 @@ type Queue interface {
 	Dequeue(queue_name string, group_name string, consumer_id string) (QueueMessage, error)
 	Ack(queue_name string, group_name string, messageID int64, receipt string) error
 	Nack(queue_name string, group_name string, messageID int64, receipt string) error
-	Status(queue_name string) (QueueStatus, error)
 	Shutdown() error
 	// new api
 	Peek(queue_name string, group_name string) (QueueMessage, error)

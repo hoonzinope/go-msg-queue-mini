@@ -30,12 +30,13 @@ type RateLimiter struct {
 }
 
 type httpServerInstance struct {
-	Addr    string
-	Queue   internal.Queue
-	ApiKey  string
-	limiter RateLimiter
-	Logger  *slog.Logger
-	uiFS    http.FileSystem
+	Addr           string
+	Queue          internal.Queue
+	QueueInspector internal.QueueInspector
+	ApiKey         string
+	limiter        RateLimiter
+	Logger         *slog.Logger
+	uiFS           http.FileSystem
 }
 
 func StartServer(
@@ -59,12 +60,13 @@ func StartServer(
 	}
 
 	httpServerInstance := &httpServerInstance{
-		Addr:    fmt.Sprintf(":%d", addr),
-		Queue:   queue,
-		ApiKey:  config.HTTP.Auth.APIKey,
-		limiter: rateLimiter,
-		Logger:  logger,
-		uiFS:    http.FS(sub),
+		Addr:           fmt.Sprintf(":%d", addr),
+		Queue:          queue,
+		QueueInspector: queue.(internal.QueueInspector),
+		ApiKey:         config.HTTP.Auth.APIKey,
+		limiter:        rateLimiter,
+		Logger:         logger,
+		uiFS:           http.FS(sub),
 	}
 
 	server := &http.Server{
@@ -104,6 +106,11 @@ func router(httpServerInstance *httpServerInstance) *gin.Engine {
 
 	r.GET("/metrics", gin.WrapH(promhttp.Handler()))
 	r.GET("/health", healthCheckHandler)
+
+	reader_no_queue_name := r.Group("/api/v1")
+	{
+		reader_no_queue_name.GET("/status/all", httpServerInstance.statusAllHandler)
+	}
 
 	reader := r.Group("/api/v1")
 	reader.Use(queueNameMiddleware())

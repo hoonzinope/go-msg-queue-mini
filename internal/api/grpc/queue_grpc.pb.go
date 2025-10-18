@@ -30,6 +30,7 @@ const (
 	QueueService_Peek_FullMethodName         = "/queue.v1.QueueService/Peek"
 	QueueService_Renew_FullMethodName        = "/queue.v1.QueueService/Renew"
 	QueueService_Status_FullMethodName       = "/queue.v1.QueueService/Status"
+	QueueService_StatusAll_FullMethodName    = "/queue.v1.QueueService/StatusAll"
 )
 
 // QueueServiceClient is the client API for QueueService service.
@@ -61,6 +62,8 @@ type QueueServiceClient interface {
 	Renew(ctx context.Context, in *RenewRequest, opts ...grpc.CallOption) (*RenewResponse, error)
 	// Status: 큐 상태 조회
 	Status(ctx context.Context, in *StatusRequest, opts ...grpc.CallOption) (*StatusResponse, error)
+	// StatusAll: 전체 큐 상태 조회
+	StatusAll(ctx context.Context, in *EmptyRequest, opts ...grpc.CallOption) (*StatusAllResponse, error)
 }
 
 type queueServiceClient struct {
@@ -181,6 +184,16 @@ func (c *queueServiceClient) Status(ctx context.Context, in *StatusRequest, opts
 	return out, nil
 }
 
+func (c *queueServiceClient) StatusAll(ctx context.Context, in *EmptyRequest, opts ...grpc.CallOption) (*StatusAllResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(StatusAllResponse)
+	err := c.cc.Invoke(ctx, QueueService_StatusAll_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // QueueServiceServer is the server API for QueueService service.
 // All implementations must embed UnimplementedQueueServiceServer
 // for forward compatibility.
@@ -210,6 +223,8 @@ type QueueServiceServer interface {
 	Renew(context.Context, *RenewRequest) (*RenewResponse, error)
 	// Status: 큐 상태 조회
 	Status(context.Context, *StatusRequest) (*StatusResponse, error)
+	// StatusAll: 전체 큐 상태 조회
+	StatusAll(context.Context, *EmptyRequest) (*StatusAllResponse, error)
 	mustEmbedUnimplementedQueueServiceServer()
 }
 
@@ -252,6 +267,9 @@ func (UnimplementedQueueServiceServer) Renew(context.Context, *RenewRequest) (*R
 }
 func (UnimplementedQueueServiceServer) Status(context.Context, *StatusRequest) (*StatusResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Status not implemented")
+}
+func (UnimplementedQueueServiceServer) StatusAll(context.Context, *EmptyRequest) (*StatusAllResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method StatusAll not implemented")
 }
 func (UnimplementedQueueServiceServer) mustEmbedUnimplementedQueueServiceServer() {}
 func (UnimplementedQueueServiceServer) testEmbeddedByValue()                      {}
@@ -472,6 +490,24 @@ func _QueueService_Status_Handler(srv interface{}, ctx context.Context, dec func
 	return interceptor(ctx, in, info, handler)
 }
 
+func _QueueService_StatusAll_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(EmptyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(QueueServiceServer).StatusAll(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: QueueService_StatusAll_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(QueueServiceServer).StatusAll(ctx, req.(*EmptyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // QueueService_ServiceDesc is the grpc.ServiceDesc for QueueService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -522,6 +558,10 @@ var QueueService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Status",
 			Handler:    _QueueService_Status_Handler,
+		},
+		{
+			MethodName: "StatusAll",
+			Handler:    _QueueService_StatusAll_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

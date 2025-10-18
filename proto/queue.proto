@@ -47,6 +47,9 @@ service QueueService {
 
   // Status: 큐 상태 조회
   rpc Status(StatusRequest) returns (StatusResponse);
+
+  // StatusAll: 전체 큐 상태 조회
+  rpc StatusAll(EmptyRequest) returns (StatusAllResponse);
 }
 
 // -----------------------------------------------------------------------------
@@ -205,4 +208,9 @@ message QueueStatus {
   int64  acked_messages = 3;
   int64  inflight_messages = 4;
   int64  dlq_messages = 5;
+}
+
+message StatusAllResponse {
+  string status = 1; // "ok"
+  map<string, QueueStatus> queue_statuses = 2;
 }

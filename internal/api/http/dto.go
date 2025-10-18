@@ -76,6 +76,10 @@ type StatusResponse struct {
 	Status      string      `json:"status"`
 	QueueStatus QueueStatus `json:"queue_status"`
 }
+type StatusAllResponse struct {
+	Status      string                 `json:"status"`
+	AllQueueMap map[string]QueueStatus `json:"all_queue_map"`
+}
 
 type PeekRequest struct {
 	Group string `json:"group" binding:"required"`

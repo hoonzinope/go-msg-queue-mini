@@ -232,7 +232,7 @@ func (h *httpServerInstance) statusHandler(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": queueNameErr.Error()})
 		return
 	}
-	status, err := h.Queue.Status(queue_name)
+	status, err := h.QueueInspector.Status(queue_name)
 	if err != nil {
 		h.Logger.Error("Error getting queue status", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get queue status"})
@@ -311,4 +311,27 @@ func (h *httpServerInstance) renewHandler(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"status": "renewed"})
+}
+
+func (h *httpServerInstance) statusAllHandler(c *gin.Context) {
+	statusMap, err := h.QueueInspector.StatusAll()
+	if err != nil {
+		h.Logger.Error("Error getting all queue status", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get all queue status"})
+		return
+	}
+	responseMap := make(map[string]QueueStatus)
+	for queueName, status := range statusMap {
+		responseMap[queueName] = QueueStatus{
+			QueueType:        status.QueueType,
+			TotalMessages:    status.TotalMessages,
+			AckedMessages:    status.AckedMessages,
+			InflightMessages: status.InflightMessages,
+			DLQMessages:      status.DLQMessages,
+		}
+	}
+	c.JSON(http.StatusOK, StatusAllResponse{
+		Status:      "ok",
+		AllQueueMap: responseMap,
+	})
 }

@@ -1456,6 +1456,58 @@ func (x *QueueStatus) GetDlqMessages() int64 {
 	return 0
 }
 
+type StatusAllResponse struct {
+	state         protoimpl.MessageState  `protogen:"open.v1"`
+	Status        string                  `protobuf:"bytes,1,opt,name=status,proto3" json:"status,omitempty"` // "ok"
+	QueueStatuses map[string]*QueueStatus `protobuf:"bytes,2,rep,name=queue_statuses,json=queueStatuses,proto3" json:"queue_statuses,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *StatusAllResponse) Reset() {
+	*x = StatusAllResponse{}
+	mi := &file_proto_queue_proto_msgTypes[26]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *StatusAllResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*StatusAllResponse) ProtoMessage() {}
+
+func (x *StatusAllResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_queue_proto_msgTypes[26]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use StatusAllResponse.ProtoReflect.Descriptor instead.
+func (*StatusAllResponse) Descriptor() ([]byte, []int) {
+	return file_proto_queue_proto_rawDescGZIP(), []int{26}
+}
+
+func (x *StatusAllResponse) GetStatus() string {
+	if x != nil {
+		return x.Status
+	}
+	return ""
+}
+
+func (x *StatusAllResponse) GetQueueStatuses() map[string]*QueueStatus {
+	if x != nil {
+		return x.QueueStatuses
+	}
+	return nil
+}
+
 var File_proto_queue_proto protoreflect.FileDescriptor
 
 const file_proto_queue_proto_rawDesc = "" +
@@ -1565,7 +1617,13 @@ const file_proto_queue_proto_rawDesc = "" +
 	"\x0etotal_messages\x18\x02 \x01(\x03R\rtotalMessages\x12%\n" +
 	"\x0eacked_messages\x18\x03 \x01(\x03R\rackedMessages\x12+\n" +
 	"\x11inflight_messages\x18\x04 \x01(\x03R\x10inflightMessages\x12!\n" +
-	"\fdlq_messages\x18\x05 \x01(\x03R\vdlqMessages2\xcf\x05\n" +
+	"\fdlq_messages\x18\x05 \x01(\x03R\vdlqMessages\"\xdb\x01\n" +
+	"\x11StatusAllResponse\x12\x16\n" +
+	"\x06status\x18\x01 \x01(\tR\x06status\x12U\n" +
+	"\x0equeue_statuses\x18\x02 \x03(\v2..queue.v1.StatusAllResponse.QueueStatusesEntryR\rqueueStatuses\x1aW\n" +
+	"\x12QueueStatusesEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12+\n" +
+	"\x05value\x18\x02 \x01(\v2\x15.queue.v1.QueueStatusR\x05value:\x028\x012\x91\x06\n" +
 	"\fQueueService\x12?\n" +
 	"\vHealthCheck\x12\x16.queue.v1.EmptyRequest\x1a\x18.queue.v1.HealthResponse\x12J\n" +
 	"\vCreateQueue\x12\x1c.queue.v1.CreateQueueRequest\x1a\x1d.queue.v1.CreateQueueResponse\x12J\n" +
@@ -1577,7 +1635,8 @@ const file_proto_queue_proto_rawDesc = "" +
 	"\x04Nack\x12\x15.queue.v1.NackRequest\x1a\x16.queue.v1.NackResponse\x125\n" +
 	"\x04Peek\x12\x15.queue.v1.PeekRequest\x1a\x16.queue.v1.PeekResponse\x128\n" +
 	"\x05Renew\x12\x16.queue.v1.RenewRequest\x1a\x17.queue.v1.RenewResponse\x12;\n" +
-	"\x06Status\x12\x17.queue.v1.StatusRequest\x1a\x18.queue.v1.StatusResponseB\x13Z\x11internal/api/grpcb\x06proto3"
+	"\x06Status\x12\x17.queue.v1.StatusRequest\x1a\x18.queue.v1.StatusResponse\x12@\n" +
+	"\tStatusAll\x12\x16.queue.v1.EmptyRequest\x1a\x1b.queue.v1.StatusAllResponseB\x13Z\x11internal/api/grpcb\x06proto3"
 
 var (
 	file_proto_queue_proto_rawDescOnce sync.Once
@@ -1591,7 +1650,7 @@ func file_proto_queue_proto_rawDescGZIP() []byte {
 	return file_proto_queue_proto_rawDescData
 }
 
-var file_proto_queue_proto_msgTypes = make([]protoimpl.MessageInfo, 26)
+var file_proto_queue_proto_msgTypes = make([]protoimpl.MessageInfo, 28)
 var file_proto_queue_proto_goTypes = []any{
 	(*EmptyRequest)(nil),         // 0: queue.v1.EmptyRequest
 	(*HealthResponse)(nil),       // 1: queue.v1.HealthResponse
@@ -1619,6 +1678,8 @@ var file_proto_queue_proto_goTypes = []any{
 	(*StatusRequest)(nil),        // 23: queue.v1.StatusRequest
 	(*StatusResponse)(nil),       // 24: queue.v1.StatusResponse
 	(*QueueStatus)(nil),          // 25: queue.v1.QueueStatus
+	(*StatusAllResponse)(nil),    // 26: queue.v1.StatusAllResponse
+	nil,                          // 27: queue.v1.StatusAllResponse.QueueStatusesEntry
 }
 var file_proto_queue_proto_depIdxs = []int32{
 	7,  // 0: queue.v1.EnqueueRequest.message:type_name -> queue.v1.EnqueueMessage
@@ -1627,33 +1688,37 @@ var file_proto_queue_proto_depIdxs = []int32{
 	13, // 3: queue.v1.DequeueResponse.message:type_name -> queue.v1.DequeueMessage
 	13, // 4: queue.v1.PeekResponse.message:type_name -> queue.v1.DequeueMessage
 	25, // 5: queue.v1.StatusResponse.queue_status:type_name -> queue.v1.QueueStatus
-	0,  // 6: queue.v1.QueueService.HealthCheck:input_type -> queue.v1.EmptyRequest
-	2,  // 7: queue.v1.QueueService.CreateQueue:input_type -> queue.v1.CreateQueueRequest
-	4,  // 8: queue.v1.QueueService.DeleteQueue:input_type -> queue.v1.DeleteQueueRequest
-	6,  // 9: queue.v1.QueueService.Enqueue:input_type -> queue.v1.EnqueueRequest
-	9,  // 10: queue.v1.QueueService.EnqueueBatch:input_type -> queue.v1.EnqueueBatchRequest
-	12, // 11: queue.v1.QueueService.Dequeue:input_type -> queue.v1.DequeueRequest
-	15, // 12: queue.v1.QueueService.Ack:input_type -> queue.v1.AckRequest
-	17, // 13: queue.v1.QueueService.Nack:input_type -> queue.v1.NackRequest
-	19, // 14: queue.v1.QueueService.Peek:input_type -> queue.v1.PeekRequest
-	21, // 15: queue.v1.QueueService.Renew:input_type -> queue.v1.RenewRequest
-	23, // 16: queue.v1.QueueService.Status:input_type -> queue.v1.StatusRequest
-	1,  // 17: queue.v1.QueueService.HealthCheck:output_type -> queue.v1.HealthResponse
-	3,  // 18: queue.v1.QueueService.CreateQueue:output_type -> queue.v1.CreateQueueResponse
-	5,  // 19: queue.v1.QueueService.DeleteQueue:output_type -> queue.v1.DeleteQueueResponse
-	8,  // 20: queue.v1.QueueService.Enqueue:output_type -> queue.v1.EnqueueResponse
-	10, // 21: queue.v1.QueueService.EnqueueBatch:output_type -> queue.v1.EnqueueBatchResponse
-	14, // 22: queue.v1.QueueService.Dequeue:output_type -> queue.v1.DequeueResponse
-	16, // 23: queue.v1.QueueService.Ack:output_type -> queue.v1.AckResponse
-	18, // 24: queue.v1.QueueService.Nack:output_type -> queue.v1.NackResponse
-	20, // 25: queue.v1.QueueService.Peek:output_type -> queue.v1.PeekResponse
-	22, // 26: queue.v1.QueueService.Renew:output_type -> queue.v1.RenewResponse
-	24, // 27: queue.v1.QueueService.Status:output_type -> queue.v1.StatusResponse
-	17, // [17:28] is the sub-list for method output_type
-	6,  // [6:17] is the sub-list for method input_type
-	6,  // [6:6] is the sub-list for extension type_name
-	6,  // [6:6] is the sub-list for extension extendee
-	0,  // [0:6] is the sub-list for field type_name
+	27, // 6: queue.v1.StatusAllResponse.queue_statuses:type_name -> queue.v1.StatusAllResponse.QueueStatusesEntry
+	25, // 7: queue.v1.StatusAllResponse.QueueStatusesEntry.value:type_name -> queue.v1.QueueStatus
+	0,  // 8: queue.v1.QueueService.HealthCheck:input_type -> queue.v1.EmptyRequest
+	2,  // 9: queue.v1.QueueService.CreateQueue:input_type -> queue.v1.CreateQueueRequest
+	4,  // 10: queue.v1.QueueService.DeleteQueue:input_type -> queue.v1.DeleteQueueRequest
+	6,  // 11: queue.v1.QueueService.Enqueue:input_type -> queue.v1.EnqueueRequest
+	9,  // 12: queue.v1.QueueService.EnqueueBatch:input_type -> queue.v1.EnqueueBatchRequest
+	12, // 13: queue.v1.QueueService.Dequeue:input_type -> queue.v1.DequeueRequest
+	15, // 14: queue.v1.QueueService.Ack:input_type -> queue.v1.AckRequest
+	17, // 15: queue.v1.QueueService.Nack:input_type -> queue.v1.NackRequest
+	19, // 16: queue.v1.QueueService.Peek:input_type -> queue.v1.PeekRequest
+	21, // 17: queue.v1.QueueService.Renew:input_type -> queue.v1.RenewRequest
+	23, // 18: queue.v1.QueueService.Status:input_type -> queue.v1.StatusRequest
+	0,  // 19: queue.v1.QueueService.StatusAll:input_type -> queue.v1.EmptyRequest
+	1,  // 20: queue.v1.QueueService.HealthCheck:output_type -> queue.v1.HealthResponse
+	3,  // 21: queue.v1.QueueService.CreateQueue:output_type -> queue.v1.CreateQueueResponse
+	5,  // 22: queue.v1.QueueService.DeleteQueue:output_type -> queue.v1.DeleteQueueResponse
+	8,  // 23: queue.v1.QueueService.Enqueue:output_type -> queue.v1.EnqueueResponse
+	10, // 24: queue.v1.QueueService.EnqueueBatch:output_type -> queue.v1.EnqueueBatchResponse
+	14, // 25: queue.v1.QueueService.Dequeue:output_type -> queue.v1.DequeueResponse
+	16, // 26: queue.v1.QueueService.Ack:output_type -> queue.v1.AckResponse
+	18, // 27: queue.v1.QueueService.Nack:output_type -> queue.v1.NackResponse
+	20, // 28: queue.v1.QueueService.Peek:output_type -> queue.v1.PeekResponse
+	22, // 29: queue.v1.QueueService.Renew:output_type -> queue.v1.RenewResponse
+	24, // 30: queue.v1.QueueService.Status:output_type -> queue.v1.StatusResponse
+	26, // 31: queue.v1.QueueService.StatusAll:output_type -> queue.v1.StatusAllResponse
+	20, // [20:32] is the sub-list for method output_type
+	8,  // [8:20] is the sub-list for method input_type
+	8,  // [8:8] is the sub-list for extension type_name
+	8,  // [8:8] is the sub-list for extension extendee
+	0,  // [0:8] is the sub-list for field type_name
 }
 
 func init() { file_proto_queue_proto_init() }
@@ -1667,7 +1732,7 @@ func file_proto_queue_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_queue_proto_rawDesc), len(file_proto_queue_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   26,
+			NumMessages:   28,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
