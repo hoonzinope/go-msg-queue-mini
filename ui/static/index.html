@@ -7,7 +7,47 @@
     <link rel="stylesheet" href="/static/index.css">
 </head>
 <body>
-    <h1>Hello World</h1>
+    <h1>queue dashboard</h1>
     <script src="/static/index.js"></script>
+
+    <div id="controls">
+        <button id="create-queue-button">Create Queue</button>
+        <button id="refresh-status-button">Refresh Status</button>
+        <!-- todo : Search functionality -->
+        <div id="search-bar" style="display: inline-block; margin-left: 20px;">
+            <input type="text" id="search-input" placeholder="Search Queues">
+            <button id="search-button">Search</button>
+        </div>  
+    </div>
+    
+
+    <div id="create-queue-modal" class="modal hidden">
+        <div class="modal-content">
+            <span class="close-button" id="close-create-queue">&times;</span>
+            <h2>Create New Queue</h2>
+            <input type="text" id="new-queue-name" placeholder="Queue Name">
+            <br>
+            <input type="text" id="api-key-input" placeholder="API Key">
+            <br>
+            <button id="submit-create-queue">Create</button>
+        </div>
+    </div>
+
+    <div id="status">
+        <table>
+            <thead>
+                <tr>
+                    <th>Queue Name</th>
+                    <th>Total Messages</th>
+                    <th>Acked Messages</th>
+                    <th>Inflight Messages</th>
+                    <th>DLQ Messages</th>
+                </tr>
+            </thead>
+            <tbody id="queue-status-body">
+                <!-- Queue status rows will be populated here by JavaScript -->
+            </tbody>
+        </table>
+    </div>
 </body>
 </html>

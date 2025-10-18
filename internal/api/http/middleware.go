@@ -66,7 +66,7 @@ func RequestIDMiddleware() gin.HandlerFunc {
 // authentication
 func AuthMiddleware(apiKey string) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		header_api_key := c.GetHeader("X-API-Key")
+		header_api_key := c.GetHeader("X-API-KEY")
 		if subtle.ConstantTimeCompare([]byte(header_api_key), []byte(apiKey)) != 1 {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
 			c.Abort()
