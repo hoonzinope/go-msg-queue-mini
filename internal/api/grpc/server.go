@@ -19,6 +19,7 @@ type queueServiceServer struct {
 }
 
 const peekMaxLimit = 100
+const peekMsgPreviewLength = 50
 
 func StartServer(ctx context.Context, config *internal.Config, queue internal.Queue, logger *slog.Logger) error {
 	addr := fmt.Sprintf(":%d", config.GRPC.Port)
@@ -214,11 +215,12 @@ func (qs *queueServiceServer) Peek(ctx context.Context, req *PeekRequest) (res *
 	}
 	if req.Options != nil {
 		if req.Options.Limit > 0 {
-			peekOptions.Limit = int(req.Options.Limit)
-		} else if req.Options.Limit > peekMaxLimit {
-			peekOptions.Limit = peekMaxLimit
+			if req.Options.Limit > peekMaxLimit {
+				peekOptions.Limit = peekMaxLimit
+			} else {
+				peekOptions.Limit = int(req.Options.Limit)
+			}
 		}
-
 		if req.Options.Cursor > 0 {
 			peekOptions.Cursor = req.Options.Cursor
 		}
@@ -238,16 +240,26 @@ func (qs *queueServiceServer) Peek(ctx context.Context, req *PeekRequest) (res *
 	dequeueMessages := make([]*DequeueMessage, len(messages))
 	for i, msg := range messages {
 		// convert payload to string or json
-		payloadBytes, err := json.Marshal(msg.Payload)
-		if err != nil {
-			qs.Logger.Error("Error marshalling message payload", "error", err)
-			return nil, fmt.Errorf("invalid payload type")
+		var payloadStr string
+		switch v := msg.Payload.(type) {
+		case string:
+			payloadStr = v
+		case json.RawMessage:
+			payloadStr = string(v)
+		default:
+			payloadBytes, _ := json.Marshal(v)
+			payloadStr = string(payloadBytes)
+		}
+		// and payload preview handling
+		if peekOptions.Preview {
+			if len(payloadStr) > peekMsgPreviewLength {
+				payloadStr = payloadStr[:peekMsgPreviewLength] + "..."
+			}
 		}
 
-		// and payload preview handling
 		dequeueMessages[i] = &DequeueMessage{
 			Id:      msg.ID,
-			Payload: string(payloadBytes),
+			Payload: payloadStr,
 			Receipt: msg.Receipt,
 		}
 	}

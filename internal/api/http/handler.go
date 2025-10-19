@@ -11,6 +11,7 @@ import (
 )
 
 const peekMaxLimit = 100
+const peekMsgPreviewLength = 50
 
 func healthCheckHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
@@ -276,9 +277,11 @@ func (h *httpServerInstance) peekHandler(c *gin.Context) {
 	}
 	if req.Options != (PeekOptions{}) {
 		if req.Options.Limit > 0 {
-			peekOptions.Limit = req.Options.Limit
-		} else if req.Options.Limit > peekMaxLimit {
-			peekOptions.Limit = peekMaxLimit
+			if req.Options.Limit > peekMaxLimit {
+				peekOptions.Limit = peekMaxLimit
+			} else {
+				peekOptions.Limit = req.Options.Limit
+			}
 		}
 		if req.Options.Order != "" {
 			peekOptions.Order = req.Options.Order
@@ -303,6 +306,23 @@ func (h *httpServerInstance) peekHandler(c *gin.Context) {
 	}
 	var dequeueMessages []DequeueMessage
 	for _, msg := range messages {
+		var payloadStr string
+		switch v := msg.Payload.(type) {
+		case string:
+			payloadStr = v
+		case json.RawMessage:
+			payloadStr = string(v)
+		default:
+			payloadBytes, _ := json.Marshal(v)
+			payloadStr = string(payloadBytes)
+		}
+		// and payload preview handling
+		if peekOptions.Preview {
+			if len(payloadStr) > peekMsgPreviewLength {
+				payloadStr = payloadStr[:peekMsgPreviewLength] + "..."
+			}
+		}
+
 		dequeueMessages = append(dequeueMessages, DequeueMessage{
 			ID:      msg.ID,
 			Payload: msg.Payload,
