@@ -325,7 +325,7 @@ func (h *httpServerInstance) peekHandler(c *gin.Context) {
 
 		dequeueMessages = append(dequeueMessages, DequeueMessage{
 			ID:      msg.ID,
-			Payload: msg.Payload,
+			Payload: payloadStr,
 			Receipt: msg.Receipt,
 		})
 	}
