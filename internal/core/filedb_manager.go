@@ -235,7 +235,7 @@ func (m *FileDBManager) ReadMessage(queue_name, group string, partitionID int, c
 			return queueMsg{}, selectCandidateErr
 		}
 		if candidateMsg.ID < 0 || candidateMsg.GlobalID == "" {
-			return queueMsg{}, queue_error.ErrNoMessage
+			return queueMsg{}, queue_error.ErrEmpty
 		}
 
 		// 2) 선점 시도 (UPSERT). leaseSec는 정수(초)
@@ -442,6 +442,30 @@ func (m *FileDBManager) PeekMessage(queue_name, group string, partitionID int) (
 		msg.QueueName = queue_name
 		return msg, nil
 	})
+}
+
+func (m *FileDBManager) PeekMessages(queue_name, group string, partitionID int, options internal.PeekOptions) ([]queueMsg, error) {
+	queueInfoID, err := m.getQueueInfoID(queue_name)
+	if queueInfoID < 0 || err != nil {
+		return nil, fmt.Errorf("queue not found: %s", queue_name)
+	}
+	// 트랜잭션 시작
+	var result []queueMsg
+	err = m.inTx(func(tx *sql.Tx) error {
+		msgs, err := m.peekCandidateQueueMsgsWithOptions(tx, queueInfoID, group, partitionID, options)
+		if err != nil {
+			return err
+		}
+		result = append(result, msgs...)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	for i := range result {
+		result[i].QueueName = queue_name
+	}
+	return result, nil
 }
 
 func (m *FileDBManager) RenewMessage(queue_name, group string, msgID int64, receipt string, extendSec int) error {

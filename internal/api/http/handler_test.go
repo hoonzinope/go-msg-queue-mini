@@ -59,10 +59,6 @@ func (m *mockQueue) Status(string) (internal.QueueStatus, error) { return intern
 
 func (m *mockQueue) Shutdown() error { return nil }
 
-func (m *mockQueue) Peek(string, string) (internal.QueueMessage, error) {
-	return internal.QueueMessage{}, queue_error.ErrEmpty
-}
-
 func (m *mockQueue) Renew(string, string, int64, string, int) error { return nil }
 
 type mockQueueInspector struct {
@@ -71,6 +67,16 @@ type mockQueueInspector struct {
 	statusAllResult map[string]internal.QueueStatus
 	statusAllError  error
 	callStatusAll   int
+	peekMessages    []internal.QueueMessage
+	peekError       error
+	peekCalls       []peekCall
+	peekErrors      []error
+}
+
+type peekCall struct {
+	queueName string
+	group     string
+	options   internal.PeekOptions
 }
 
 func (m *mockQueueInspector) Status(string) (internal.QueueStatus, error) {
@@ -80,6 +86,19 @@ func (m *mockQueueInspector) Status(string) (internal.QueueStatus, error) {
 func (m *mockQueueInspector) StatusAll() (map[string]internal.QueueStatus, error) {
 	m.callStatusAll++
 	return m.statusAllResult, m.statusAllError
+}
+
+func (m *mockQueueInspector) Peek(queueName, group string, options internal.PeekOptions) ([]internal.QueueMessage, error) {
+	m.peekCalls = append(m.peekCalls, peekCall{
+		queueName: queueName,
+		group:     group,
+		options:   options,
+	})
+	m.peekErrors = append(m.peekErrors, m.peekError)
+	if m.peekError != nil {
+		return nil, m.peekError
+	}
+	return m.peekMessages, nil
 }
 
 func newTestHTTPServer(queue internal.Queue) *httpServerInstance {
@@ -370,5 +389,127 @@ func TestStatusAllHandlerError(t *testing.T) {
 	}
 	if inspector.callStatusAll != 1 {
 		t.Fatalf("StatusAll call count = %d, want 1", inspector.callStatusAll)
+	}
+}
+
+func TestPeekHandlerSuccess(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	mq := &mockQueue{}
+	inspector := &mockQueueInspector{
+		peekMessages: []internal.QueueMessage{
+			{ID: 101, Payload: "alpha", Receipt: "r-1"},
+			{ID: 102, Payload: "beta", Receipt: "r-2"},
+		},
+	}
+	server := newTestHTTPServer(mq)
+	server.QueueInspector = inspector
+
+	body := PeekRequest{
+		Group: "group-A",
+		Options: PeekOptions{
+			Limit:  2,
+			Cursor: 10,
+			Order:  "desc",
+		},
+	}
+	encoded, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("failed to marshal request: %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Set("queue_name", "tasks")
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/tasks/peek", bytes.NewReader(encoded))
+	req.Header.Set("Content-Type", "application/json")
+	c.Request = req
+
+	server.peekHandler(c)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
+	}
+	if len(inspector.peekCalls) != 1 {
+		t.Fatalf("peek call count = %d, want 1", len(inspector.peekCalls))
+	}
+	call := inspector.peekCalls[0]
+	if call.queueName != "tasks" {
+		t.Fatalf("queue name = %s, want tasks", call.queueName)
+	}
+	if call.group != "group-A" {
+		t.Fatalf("group name = %s, want group-A", call.group)
+	}
+	if call.options.Limit != 2 || call.options.Cursor != 10 || call.options.Order != "desc" {
+		t.Fatalf("unexpected peek options: %+v", call.options)
+	}
+
+	var resp PeekResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to unmarshal peek response: %v", err)
+	}
+	if resp.Status != "ok" {
+		t.Fatalf("response status = %s, want ok", resp.Status)
+	}
+	if len(resp.Messages) != 2 {
+		t.Fatalf("message count = %d, want 2", len(resp.Messages))
+	}
+	if resp.Messages[0].ID != 101 || resp.Messages[0].Receipt != "r-1" || resp.Messages[0].Payload != "alpha" {
+		t.Fatalf("unexpected first message: %#v", resp.Messages[0])
+	}
+}
+
+func TestPeekHandlerEmptyQueue(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	mq := &mockQueue{}
+	inspector := &mockQueueInspector{
+		peekError: queue_error.ErrNoMessage,
+	}
+	server := newTestHTTPServer(mq)
+	server.QueueInspector = inspector
+
+	if inspector.peekError == nil {
+		t.Fatal("expected peekError to be set for empty queue scenario")
+	}
+
+	body := PeekRequest{
+		Group: "group-A",
+		Options: PeekOptions{
+			Limit: 1,
+		},
+	}
+	encoded, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("failed to marshal request: %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Set("queue_name", "tasks")
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/tasks/peek", bytes.NewReader(encoded))
+	req.Header.Set("Content-Type", "application/json")
+	c.Request = req
+
+	server.peekHandler(c)
+
+	if len(inspector.peekCalls) != 1 {
+		t.Fatalf("peek call count = %d, want 1", len(inspector.peekCalls))
+	}
+	if len(inspector.peekErrors) != 1 {
+		t.Fatalf("peek error record count = %d, want 1", len(inspector.peekErrors))
+	}
+	if inspector.peekErrors[0] == nil {
+		t.Fatalf("expected recorded peek error, got nil")
+	}
+	if !errors.Is(inspector.peekErrors[0], queue_error.ErrNoMessage) {
+		t.Fatalf("unexpected recorded error: %v", inspector.peekErrors[0])
+	}
+	t.Logf("recorded peek error: %v", inspector.peekErrors[0])
+	t.Logf("response status=%d body=%q", w.Code, w.Body.String())
+	t.Logf("writer reported status=%d", c.Writer.Status())
+	if c.Writer.Status() != http.StatusNoContent {
+		t.Fatalf("writer status = %d, want %d", c.Writer.Status(), http.StatusNoContent)
+	}
+	if w.Body.Len() != 0 {
+		t.Fatalf("expected empty response body, got %q", w.Body.String())
 	}
 }

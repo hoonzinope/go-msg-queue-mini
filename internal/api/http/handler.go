@@ -265,9 +265,17 @@ func (h *httpServerInstance) peekHandler(c *gin.Context) {
 		return
 	}
 
-	message, err := h.Queue.Peek(queue_name, req.Group)
+	// convert PeekRequest.Options to internal.PeekOptions
+	peekOptions := internal.PeekOptions{
+		Limit:   req.Options.Limit,
+		Cursor:  req.Options.Cursor,
+		Order:   req.Options.Order,
+		Preview: req.Options.Preview,
+	}
+
+	messages, err := h.QueueInspector.Peek(queue_name, req.Group, peekOptions)
 	if err != nil {
-		if errors.Is(err, queue_error.ErrEmpty) {
+		if errors.Is(err, queue_error.ErrEmpty) || errors.Is(err, queue_error.ErrNoMessage) {
 			c.Status(http.StatusNoContent)
 			return
 		}
@@ -275,14 +283,18 @@ func (h *httpServerInstance) peekHandler(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to peek message"})
 		return
 	}
+	var dequeueMessages []DequeueMessage
+	for _, msg := range messages {
+		dequeueMessages = append(dequeueMessages, DequeueMessage{
+			ID:      msg.ID,
+			Payload: msg.Payload,
+			Receipt: msg.Receipt,
+		})
+	}
 
 	c.JSON(http.StatusOK, PeekResponse{
-		Status: "ok",
-		Message: DequeueMessage{
-			Payload: message.Payload,
-			Receipt: message.Receipt,
-			ID:      message.ID,
-		},
+		Status:   "ok",
+		Messages: dequeueMessages,
 	})
 }
 

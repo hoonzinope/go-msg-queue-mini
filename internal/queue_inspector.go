@@ -9,7 +9,15 @@ type QueueStatus struct {
 	DLQMessages      int64
 }
 
+type PeekOptions struct {
+	Limit   int    // number of messages to peek
+	Cursor  int64  // for pagination
+	Order   string // "asc" or "desc"
+	Preview bool   // whether to return full message or just metadata
+}
+
 type QueueInspector interface {
 	Status(queueName string) (QueueStatus, error)
 	StatusAll() (map[string]QueueStatus, error)
+	Peek(queueName, groupName string, options PeekOptions) ([]QueueMessage, error)
 }

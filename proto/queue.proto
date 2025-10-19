@@ -171,12 +171,21 @@ message NackResponse {
 message PeekRequest {
   string queue_name = 1;
   string group = 2;
+  PeekOptions options = 3;
+}
+
+// peek options
+message PeekOptions {
+  int64 limit = 1;    // number of messages to peek
+  int64 cursor = 2; // for pagination
+  string order = 3; // "asc" or "desc"
+  bool preview = 4; // whether to return full message or just metadata
 }
 
 // HTTP: PeekResponse{ status, message }
 message PeekResponse {
   string status = 1;           // "ok"
-  DequeueMessage message = 2;
+  repeated DequeueMessage message = 2;
 }
 
 // HTTP: RenewRequest{ group, message_id, receipt, extend_sec }

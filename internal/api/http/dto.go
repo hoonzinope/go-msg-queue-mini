@@ -1,6 +1,8 @@
 package http
 
-import "encoding/json"
+import (
+	"encoding/json"
+)
 
 type EnqueueRequest struct {
 	Message         json.RawMessage `json:"message" binding:"required"`
@@ -82,12 +84,20 @@ type StatusAllResponse struct {
 }
 
 type PeekRequest struct {
-	Group string `json:"group" binding:"required"`
+	Group   string      `json:"group" binding:"required"`
+	Options PeekOptions `json:"options" binding:"required"`
+}
+
+type PeekOptions struct {
+	Limit   int    `json:"limit"`   // number of messages to peek
+	Cursor  int64  `json:"cursor"`  // for pagination
+	Order   string `json:"order"`   // "asc" or "desc"
+	Preview bool   `json:"preview"` // whether to return full message or just metadata
 }
 
 type PeekResponse struct {
-	Status  string         `json:"status"`
-	Message DequeueMessage `json:"message"`
+	Status   string           `json:"status"`
+	Messages []DequeueMessage `json:"messages"`
 }
 
 type RenewRequest struct {

@@ -202,19 +202,29 @@ func (qs *queueServiceServer) Nack(ctx context.Context, req *NackRequest) (res *
 }
 
 func (qs *queueServiceServer) Peek(ctx context.Context, req *PeekRequest) (res *PeekResponse, err error) {
-	message, err := qs.Queue.Peek(req.QueueName, req.Group)
+	peekOptions := internal.PeekOptions{
+		Limit:   int(req.Options.Limit),
+		Cursor:  req.Options.Cursor,
+		Order:   req.Options.Order,
+		Preview: req.Options.Preview,
+	}
+
+	messages, err := qs.QueueInspector.Peek(req.QueueName, req.Group, peekOptions)
 	if err != nil {
 		qs.Logger.Error("Error peeking message", "error", err)
 		return nil, err
 	}
-	dequeueMessage := &DequeueMessage{
-		Id:      message.ID,
-		Payload: message.Payload.(string),
-		Receipt: message.Receipt,
+	dequeueMessages := make([]*DequeueMessage, len(messages))
+	for i, msg := range messages {
+		dequeueMessages[i] = &DequeueMessage{
+			Id:      msg.ID,
+			Payload: msg.Payload.(string),
+			Receipt: msg.Receipt,
+		}
 	}
 	return &PeekResponse{
 		Status:  "ok",
-		Message: dequeueMessage,
+		Message: dequeueMessages,
 	}, nil
 }
 
