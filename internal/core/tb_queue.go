@@ -6,6 +6,7 @@ import (
 	"go-msg-queue-mini/internal"
 	queue_error "go-msg-queue-mini/internal/queue_error"
 	"go-msg-queue-mini/util"
+	"strings"
 )
 
 // create queue msg table
@@ -296,7 +297,28 @@ func (m *FileDBManager) partialSuccess(tx *sql.Tx, stmt *sql.Stmt,
 // 후보 메시지 조회
 func (m *FileDBManager) getCandidateQueueMsg(tx *sql.Tx, queueInfoID int64, group string, partitionID int) (candidateMsg queueMsg, err error) {
 	// 1) 후보 조회
-	err = tx.QueryRow(`
+	options := internal.PeekOptions{
+		Limit:   1,
+		Cursor:  0,
+		Order:   "asc",
+		Preview: false,
+	}
+	msgs, err := m.peekCandidateQueueMsgsWithOptions(tx, queueInfoID, group, partitionID, options)
+	if err != nil {
+		return queueMsg{}, err
+	}
+	if len(msgs) == 0 {
+		return queueMsg{}, queue_error.ErrEmpty
+	}
+	return msgs[0], nil
+}
+
+// 후보 메세지 조회 (option에 따라)
+func (m *FileDBManager) peekCandidateQueueMsgsWithOptions(tx *sql.Tx, queueInfoID int64, group string, partitionID int, options internal.PeekOptions) ([]queueMsg, error) {
+	var msgs []queueMsg
+	var err error
+	// build query
+	query := `
 			SELECT q.id, q.msg, q.insert_ts, "" as receipt, q.global_id, q.partition_id
 			FROM queue q
 			LEFT JOIN acked a
@@ -317,21 +339,59 @@ func (m *FileDBManager) getCandidateQueueMsg(tx *sql.Tx, queueInfoID int64, grou
 			AND a.global_id IS NULL
 			AND (i.q_id IS NULL OR i.lease_until <= CURRENT_TIMESTAMP)
 			AND q.partition_id = ?
-			ORDER BY q.id ASC
-			LIMIT 1
-		`, group, partitionID,
+		`
+
+	args := []interface{}{
 		group, partitionID,
-		queueInfoID, partitionID).Scan(
-		&candidateMsg.ID, &candidateMsg.Msg,
-		&candidateMsg.InsertTS, &candidateMsg.Receipt,
-		&candidateMsg.GlobalID, &candidateMsg.PartitionID)
-	if err == sql.ErrNoRows {
-		return queueMsg{}, queue_error.ErrEmpty
+		group, partitionID,
+		queueInfoID,
+		partitionID,
 	}
+	orderDirection := "ASC"
+	if strings.ToLower(options.Order) == "desc" {
+		orderDirection = "DESC"
+	}
+	limit := 1
+	if options.Limit > 0 {
+		limit = options.Limit
+	}
+
+	if options.Cursor > 0 {
+		if orderDirection == "ASC" {
+			query += " AND q.id > ? "
+		} else {
+			query += " AND q.id < ? "
+		}
+		args = append(args, options.Cursor)
+	}
+	query += " ORDER BY q.id " + orderDirection + " "
+	query += " LIMIT ?"
+	args = append(args, limit)
+
+	rows, err := tx.Query(query, args...)
 	if err != nil {
-		return queueMsg{}, err
+		return nil, err
 	}
-	return candidateMsg, nil
+	defer rows.Close()
+
+	for rows.Next() {
+		var msg queueMsg
+		err = rows.Scan(
+			&msg.ID, &msg.Msg,
+			&msg.InsertTS, &msg.Receipt,
+			&msg.GlobalID, &msg.PartitionID)
+		if err != nil {
+			return nil, err
+		}
+		msgs = append(msgs, msg)
+	}
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(msgs) == 0 {
+		return nil, queue_error.ErrEmpty
+	}
+	return msgs, nil
 }
 
 // 내가 점유한 메시지 반환 (consumer_id로 한정)

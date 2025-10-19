@@ -11,7 +11,7 @@ A compact yet robust Go-based message queue. It supports Producer/Consumer runti
 - **Processing guarantees**: Ack/Nack, inflight, DLQ, retry with backoff + jitter
 - **Delayed delivery**: Schedule visibility via the optional `delay` parameter (e.g., "10s", "5m", "1h30m")
 - **Lease/Renew**: Message lease with `/renew` to extend
-- **Peek**: Inspect next message without claiming via `/peek`
+- **Peek**: `/peek` accepts options to inspect up to 100 messages with paging/preview
 - **Status**: `/status` returns totals for queue/acked/inflight/dlq
 - **Batch enqueue**: Load multiple messages at once via `/enqueue/batch` and gRPC `EnqueueBatch`, supporting `stopOnFailure`/`partialSuccess` modes
 - **Deduplication**: Optional `deduplication_id` enforces per-queue idempotency within a 1-hour window
@@ -171,7 +171,8 @@ grpc:
   - Applies exponential backoff + jitter; moves to DLQ after `max-retry`.
 
 - Peek: `POST /api/v1/:queue_name/peek`
-  - Request: `{ "group": "g1" }` (inspect next available message without lease)
+  - Request: `{ "group": "g1", "options": { "limit": 3, "cursor": 25, "order": "asc", "preview": true } }`
+  - Notes: `limit` defaults to 1 (max 100), `cursor` paginates by message ID, `order` accepts `asc`/`desc`, `preview` returns payload snippets up to 50 chars
   - Empty queue: `204 No Content`
 
 - Renew: `POST /api/v1/:queue_name/renew` (requires `X-API-Key`)
@@ -187,6 +188,7 @@ Common: server returns `X-Request-ID` (auto-generated if missing). Bursts may re
 - Enable with `grpc.enabled: true`, default port `50051`.
 - Health: `queue.v1.QueueService/HealthCheck` → `{ status: "ok" }`.
 - Core RPCs: `CreateQueue`, `DeleteQueue`, `Enqueue`, `EnqueueBatch`, `Dequeue`, `Ack`, `Nack`, `Peek`, `Renew`, `Status` (see `proto/queue.proto`).
+- Peek requests accept optional `options` (`limit`, `cursor`, `order`, `preview`) to fetch up to 100 messages or return payload previews.
 - Message type: gRPC `message` payloads are strings; HTTP accepts arbitrary JSON payloads.
 - `Enqueue`/`EnqueueBatch` accept optional `delay` (Go duration) and `deduplication_id` (string) for scheduling or 1-hour idempotency; omit them for immediate delivery.
 - For `EnqueueBatch`, set `mode` to `stopOnFailure` or `partialSuccess`; responses include `failure_count`/`failed_messages`, and `stopOnFailure` propagates errors as 5xx responses.

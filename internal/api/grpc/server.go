@@ -2,6 +2,7 @@ package grpc
 
 import (
 	context "context"
+	"encoding/json"
 	"fmt"
 	"go-msg-queue-mini/internal"
 	"log/slog"
@@ -16,6 +17,9 @@ type queueServiceServer struct {
 	internal.QueueInspector
 	Logger *slog.Logger
 }
+
+const peekMaxLimit = 100
+const peekMsgPreviewLength = 50
 
 func StartServer(ctx context.Context, config *internal.Config, queue internal.Queue, logger *slog.Logger) error {
 	addr := fmt.Sprintf(":%d", config.GRPC.Port)
@@ -202,19 +206,66 @@ func (qs *queueServiceServer) Nack(ctx context.Context, req *NackRequest) (res *
 }
 
 func (qs *queueServiceServer) Peek(ctx context.Context, req *PeekRequest) (res *PeekResponse, err error) {
-	message, err := qs.Queue.Peek(req.QueueName, req.Group)
+
+	peekOptions := internal.PeekOptions{
+		Limit:   1,
+		Cursor:  0,
+		Order:   "asc",
+		Preview: false,
+	}
+	if req.Options != nil {
+		if req.Options.Limit > 0 {
+			if req.Options.Limit > peekMaxLimit {
+				peekOptions.Limit = peekMaxLimit
+			} else {
+				peekOptions.Limit = int(req.Options.Limit)
+			}
+		}
+		if req.Options.Cursor > 0 {
+			peekOptions.Cursor = req.Options.Cursor
+		}
+		if req.Options.Order != "" {
+			peekOptions.Order = req.Options.Order
+		}
+		if req.Options.Preview {
+			peekOptions.Preview = req.Options.Preview
+		}
+	}
+
+	messages, err := qs.QueueInspector.Peek(req.QueueName, req.Group, peekOptions)
 	if err != nil {
 		qs.Logger.Error("Error peeking message", "error", err)
 		return nil, err
 	}
-	dequeueMessage := &DequeueMessage{
-		Id:      message.ID,
-		Payload: message.Payload.(string),
-		Receipt: message.Receipt,
+	dequeueMessages := make([]*DequeueMessage, len(messages))
+	for i, msg := range messages {
+		// convert payload to string or json
+		var payloadStr string
+		switch v := msg.Payload.(type) {
+		case string:
+			payloadStr = v
+		case json.RawMessage:
+			payloadStr = string(v)
+		default:
+			payloadBytes, _ := json.Marshal(v)
+			payloadStr = string(payloadBytes)
+		}
+		// and payload preview handling
+		if peekOptions.Preview {
+			if len(payloadStr) > peekMsgPreviewLength {
+				payloadStr = payloadStr[:peekMsgPreviewLength] + "..."
+			}
+		}
+
+		dequeueMessages[i] = &DequeueMessage{
+			Id:      msg.ID,
+			Payload: payloadStr,
+			Receipt: msg.Receipt,
+		}
 	}
 	return &PeekResponse{
 		Status:  "ok",
-		Message: dequeueMessage,
+		Message: dequeueMessages,
 	}, nil
 }
 

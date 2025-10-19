@@ -2,7 +2,6 @@ package core
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"go-msg-queue-mini/internal"
 	"go-msg-queue-mini/internal/metrics"
@@ -306,24 +305,25 @@ func (q *fileDBQueue) Shutdown() error {
 }
 
 // bellow new api for http, gRPC
-func (q *fileDBQueue) Peek(queue_name, group_name string) (internal.QueueMessage, error) {
+func (q *fileDBQueue) Peek(queue_name, group_name string, options internal.PeekOptions) ([]internal.QueueMessage, error) {
 	partitionID := 0
-	msg, err := q.manager.PeekMessage(queue_name, group_name, partitionID)
+	msgs, err := q.manager.PeekMessages(queue_name, group_name, partitionID, options)
 	if err != nil {
-		if errors.Is(err, queue_error.ErrEmpty) {
-			return internal.QueueMessage{}, err
+		return nil, err
+	}
+	var items []internal.QueueMessage
+	for _, msg := range msgs {
+		var item any
+		if err := json.Unmarshal(msg.Msg, &item); err != nil {
+			return nil, err
 		}
-		return internal.QueueMessage{}, err
+		items = append(items, internal.QueueMessage{
+			Payload: item,
+			ID:      msg.ID,
+			Receipt: msg.Receipt,
+		})
 	}
-	var item any
-	if err := json.Unmarshal(msg.Msg, &item); err != nil {
-		return internal.QueueMessage{}, err
-	}
-	return internal.QueueMessage{
-		Payload: item,
-		ID:      msg.ID,
-		Receipt: "",
-	}, nil
+	return items, nil
 }
 
 func (q *fileDBQueue) Renew(queue_name, group_name string, messageID int64, receipt string, extendSec int) error {

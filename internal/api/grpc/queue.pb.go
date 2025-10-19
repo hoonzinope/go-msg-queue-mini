@@ -1060,6 +1060,7 @@ type PeekRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	QueueName     string                 `protobuf:"bytes,1,opt,name=queue_name,json=queueName,proto3" json:"queue_name,omitempty"`
 	Group         string                 `protobuf:"bytes,2,opt,name=group,proto3" json:"group,omitempty"`
+	Options       *PeekOptions           `protobuf:"bytes,3,opt,name=options,proto3" json:"options,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1108,18 +1109,94 @@ func (x *PeekRequest) GetGroup() string {
 	return ""
 }
 
+func (x *PeekRequest) GetOptions() *PeekOptions {
+	if x != nil {
+		return x.Options
+	}
+	return nil
+}
+
+// peek options
+type PeekOptions struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Limit         int64                  `protobuf:"varint,1,opt,name=limit,proto3" json:"limit,omitempty"`     // number of messages to peek
+	Cursor        int64                  `protobuf:"varint,2,opt,name=cursor,proto3" json:"cursor,omitempty"`   // for pagination
+	Order         string                 `protobuf:"bytes,3,opt,name=order,proto3" json:"order,omitempty"`      // "asc" or "desc"
+	Preview       bool                   `protobuf:"varint,4,opt,name=preview,proto3" json:"preview,omitempty"` // whether to return full message or just metadata
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PeekOptions) Reset() {
+	*x = PeekOptions{}
+	mi := &file_proto_queue_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PeekOptions) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PeekOptions) ProtoMessage() {}
+
+func (x *PeekOptions) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_queue_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PeekOptions.ProtoReflect.Descriptor instead.
+func (*PeekOptions) Descriptor() ([]byte, []int) {
+	return file_proto_queue_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *PeekOptions) GetLimit() int64 {
+	if x != nil {
+		return x.Limit
+	}
+	return 0
+}
+
+func (x *PeekOptions) GetCursor() int64 {
+	if x != nil {
+		return x.Cursor
+	}
+	return 0
+}
+
+func (x *PeekOptions) GetOrder() string {
+	if x != nil {
+		return x.Order
+	}
+	return ""
+}
+
+func (x *PeekOptions) GetPreview() bool {
+	if x != nil {
+		return x.Preview
+	}
+	return false
+}
+
 // HTTP: PeekResponse{ status, message }
 type PeekResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Status        string                 `protobuf:"bytes,1,opt,name=status,proto3" json:"status,omitempty"` // "ok"
-	Message       *DequeueMessage        `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`
+	Message       []*DequeueMessage      `protobuf:"bytes,2,rep,name=message,proto3" json:"message,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *PeekResponse) Reset() {
 	*x = PeekResponse{}
-	mi := &file_proto_queue_proto_msgTypes[20]
+	mi := &file_proto_queue_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1131,7 +1208,7 @@ func (x *PeekResponse) String() string {
 func (*PeekResponse) ProtoMessage() {}
 
 func (x *PeekResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_queue_proto_msgTypes[20]
+	mi := &file_proto_queue_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1144,7 +1221,7 @@ func (x *PeekResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PeekResponse.ProtoReflect.Descriptor instead.
 func (*PeekResponse) Descriptor() ([]byte, []int) {
-	return file_proto_queue_proto_rawDescGZIP(), []int{20}
+	return file_proto_queue_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *PeekResponse) GetStatus() string {
@@ -1154,7 +1231,7 @@ func (x *PeekResponse) GetStatus() string {
 	return ""
 }
 
-func (x *PeekResponse) GetMessage() *DequeueMessage {
+func (x *PeekResponse) GetMessage() []*DequeueMessage {
 	if x != nil {
 		return x.Message
 	}
@@ -1175,7 +1252,7 @@ type RenewRequest struct {
 
 func (x *RenewRequest) Reset() {
 	*x = RenewRequest{}
-	mi := &file_proto_queue_proto_msgTypes[21]
+	mi := &file_proto_queue_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1187,7 +1264,7 @@ func (x *RenewRequest) String() string {
 func (*RenewRequest) ProtoMessage() {}
 
 func (x *RenewRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_queue_proto_msgTypes[21]
+	mi := &file_proto_queue_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1200,7 +1277,7 @@ func (x *RenewRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RenewRequest.ProtoReflect.Descriptor instead.
 func (*RenewRequest) Descriptor() ([]byte, []int) {
-	return file_proto_queue_proto_rawDescGZIP(), []int{21}
+	return file_proto_queue_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *RenewRequest) GetQueueName() string {
@@ -1247,7 +1324,7 @@ type RenewResponse struct {
 
 func (x *RenewResponse) Reset() {
 	*x = RenewResponse{}
-	mi := &file_proto_queue_proto_msgTypes[22]
+	mi := &file_proto_queue_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1259,7 +1336,7 @@ func (x *RenewResponse) String() string {
 func (*RenewResponse) ProtoMessage() {}
 
 func (x *RenewResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_queue_proto_msgTypes[22]
+	mi := &file_proto_queue_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1272,7 +1349,7 @@ func (x *RenewResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RenewResponse.ProtoReflect.Descriptor instead.
 func (*RenewResponse) Descriptor() ([]byte, []int) {
-	return file_proto_queue_proto_rawDescGZIP(), []int{22}
+	return file_proto_queue_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *RenewResponse) GetStatus() string {
@@ -1291,7 +1368,7 @@ type StatusRequest struct {
 
 func (x *StatusRequest) Reset() {
 	*x = StatusRequest{}
-	mi := &file_proto_queue_proto_msgTypes[23]
+	mi := &file_proto_queue_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1303,7 +1380,7 @@ func (x *StatusRequest) String() string {
 func (*StatusRequest) ProtoMessage() {}
 
 func (x *StatusRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_queue_proto_msgTypes[23]
+	mi := &file_proto_queue_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1316,7 +1393,7 @@ func (x *StatusRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StatusRequest.ProtoReflect.Descriptor instead.
 func (*StatusRequest) Descriptor() ([]byte, []int) {
-	return file_proto_queue_proto_rawDescGZIP(), []int{23}
+	return file_proto_queue_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *StatusRequest) GetQueueName() string {
@@ -1337,7 +1414,7 @@ type StatusResponse struct {
 
 func (x *StatusResponse) Reset() {
 	*x = StatusResponse{}
-	mi := &file_proto_queue_proto_msgTypes[24]
+	mi := &file_proto_queue_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1349,7 +1426,7 @@ func (x *StatusResponse) String() string {
 func (*StatusResponse) ProtoMessage() {}
 
 func (x *StatusResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_queue_proto_msgTypes[24]
+	mi := &file_proto_queue_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1362,7 +1439,7 @@ func (x *StatusResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StatusResponse.ProtoReflect.Descriptor instead.
 func (*StatusResponse) Descriptor() ([]byte, []int) {
-	return file_proto_queue_proto_rawDescGZIP(), []int{24}
+	return file_proto_queue_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *StatusResponse) GetStatus() string {
@@ -1393,7 +1470,7 @@ type QueueStatus struct {
 
 func (x *QueueStatus) Reset() {
 	*x = QueueStatus{}
-	mi := &file_proto_queue_proto_msgTypes[25]
+	mi := &file_proto_queue_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1405,7 +1482,7 @@ func (x *QueueStatus) String() string {
 func (*QueueStatus) ProtoMessage() {}
 
 func (x *QueueStatus) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_queue_proto_msgTypes[25]
+	mi := &file_proto_queue_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1418,7 +1495,7 @@ func (x *QueueStatus) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use QueueStatus.ProtoReflect.Descriptor instead.
 func (*QueueStatus) Descriptor() ([]byte, []int) {
-	return file_proto_queue_proto_rawDescGZIP(), []int{25}
+	return file_proto_queue_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *QueueStatus) GetQueueName() string {
@@ -1466,7 +1543,7 @@ type StatusAllResponse struct {
 
 func (x *StatusAllResponse) Reset() {
 	*x = StatusAllResponse{}
-	mi := &file_proto_queue_proto_msgTypes[26]
+	mi := &file_proto_queue_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1478,7 +1555,7 @@ func (x *StatusAllResponse) String() string {
 func (*StatusAllResponse) ProtoMessage() {}
 
 func (x *StatusAllResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_queue_proto_msgTypes[26]
+	mi := &file_proto_queue_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1491,7 +1568,7 @@ func (x *StatusAllResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StatusAllResponse.ProtoReflect.Descriptor instead.
 func (*StatusAllResponse) Descriptor() ([]byte, []int) {
-	return file_proto_queue_proto_rawDescGZIP(), []int{26}
+	return file_proto_queue_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *StatusAllResponse) GetStatus() string {
@@ -1586,14 +1663,20 @@ const file_proto_queue_proto_rawDesc = "" +
 	"message_id\x18\x03 \x01(\x03R\tmessageId\x12\x18\n" +
 	"\areceipt\x18\x04 \x01(\tR\areceipt\"&\n" +
 	"\fNackResponse\x12\x16\n" +
-	"\x06status\x18\x01 \x01(\tR\x06status\"B\n" +
+	"\x06status\x18\x01 \x01(\tR\x06status\"s\n" +
 	"\vPeekRequest\x12\x1d\n" +
 	"\n" +
 	"queue_name\x18\x01 \x01(\tR\tqueueName\x12\x14\n" +
-	"\x05group\x18\x02 \x01(\tR\x05group\"Z\n" +
+	"\x05group\x18\x02 \x01(\tR\x05group\x12/\n" +
+	"\aoptions\x18\x03 \x01(\v2\x15.queue.v1.PeekOptionsR\aoptions\"k\n" +
+	"\vPeekOptions\x12\x14\n" +
+	"\x05limit\x18\x01 \x01(\x03R\x05limit\x12\x16\n" +
+	"\x06cursor\x18\x02 \x01(\x03R\x06cursor\x12\x14\n" +
+	"\x05order\x18\x03 \x01(\tR\x05order\x12\x18\n" +
+	"\apreview\x18\x04 \x01(\bR\apreview\"Z\n" +
 	"\fPeekResponse\x12\x16\n" +
 	"\x06status\x18\x01 \x01(\tR\x06status\x122\n" +
-	"\amessage\x18\x02 \x01(\v2\x18.queue.v1.DequeueMessageR\amessage\"\x9b\x01\n" +
+	"\amessage\x18\x02 \x03(\v2\x18.queue.v1.DequeueMessageR\amessage\"\x9b\x01\n" +
 	"\fRenewRequest\x12\x1d\n" +
 	"\n" +
 	"queue_name\x18\x01 \x01(\tR\tqueueName\x12\x14\n" +
@@ -1650,7 +1733,7 @@ func file_proto_queue_proto_rawDescGZIP() []byte {
 	return file_proto_queue_proto_rawDescData
 }
 
-var file_proto_queue_proto_msgTypes = make([]protoimpl.MessageInfo, 28)
+var file_proto_queue_proto_msgTypes = make([]protoimpl.MessageInfo, 29)
 var file_proto_queue_proto_goTypes = []any{
 	(*EmptyRequest)(nil),         // 0: queue.v1.EmptyRequest
 	(*HealthResponse)(nil),       // 1: queue.v1.HealthResponse
@@ -1672,53 +1755,55 @@ var file_proto_queue_proto_goTypes = []any{
 	(*NackRequest)(nil),          // 17: queue.v1.NackRequest
 	(*NackResponse)(nil),         // 18: queue.v1.NackResponse
 	(*PeekRequest)(nil),          // 19: queue.v1.PeekRequest
-	(*PeekResponse)(nil),         // 20: queue.v1.PeekResponse
-	(*RenewRequest)(nil),         // 21: queue.v1.RenewRequest
-	(*RenewResponse)(nil),        // 22: queue.v1.RenewResponse
-	(*StatusRequest)(nil),        // 23: queue.v1.StatusRequest
-	(*StatusResponse)(nil),       // 24: queue.v1.StatusResponse
-	(*QueueStatus)(nil),          // 25: queue.v1.QueueStatus
-	(*StatusAllResponse)(nil),    // 26: queue.v1.StatusAllResponse
-	nil,                          // 27: queue.v1.StatusAllResponse.QueueStatusesEntry
+	(*PeekOptions)(nil),          // 20: queue.v1.PeekOptions
+	(*PeekResponse)(nil),         // 21: queue.v1.PeekResponse
+	(*RenewRequest)(nil),         // 22: queue.v1.RenewRequest
+	(*RenewResponse)(nil),        // 23: queue.v1.RenewResponse
+	(*StatusRequest)(nil),        // 24: queue.v1.StatusRequest
+	(*StatusResponse)(nil),       // 25: queue.v1.StatusResponse
+	(*QueueStatus)(nil),          // 26: queue.v1.QueueStatus
+	(*StatusAllResponse)(nil),    // 27: queue.v1.StatusAllResponse
+	nil,                          // 28: queue.v1.StatusAllResponse.QueueStatusesEntry
 }
 var file_proto_queue_proto_depIdxs = []int32{
 	7,  // 0: queue.v1.EnqueueRequest.message:type_name -> queue.v1.EnqueueMessage
 	7,  // 1: queue.v1.EnqueueBatchRequest.messages:type_name -> queue.v1.EnqueueMessage
 	11, // 2: queue.v1.EnqueueBatchResponse.failed_messages:type_name -> queue.v1.FailedMessage
 	13, // 3: queue.v1.DequeueResponse.message:type_name -> queue.v1.DequeueMessage
-	13, // 4: queue.v1.PeekResponse.message:type_name -> queue.v1.DequeueMessage
-	25, // 5: queue.v1.StatusResponse.queue_status:type_name -> queue.v1.QueueStatus
-	27, // 6: queue.v1.StatusAllResponse.queue_statuses:type_name -> queue.v1.StatusAllResponse.QueueStatusesEntry
-	25, // 7: queue.v1.StatusAllResponse.QueueStatusesEntry.value:type_name -> queue.v1.QueueStatus
-	0,  // 8: queue.v1.QueueService.HealthCheck:input_type -> queue.v1.EmptyRequest
-	2,  // 9: queue.v1.QueueService.CreateQueue:input_type -> queue.v1.CreateQueueRequest
-	4,  // 10: queue.v1.QueueService.DeleteQueue:input_type -> queue.v1.DeleteQueueRequest
-	6,  // 11: queue.v1.QueueService.Enqueue:input_type -> queue.v1.EnqueueRequest
-	9,  // 12: queue.v1.QueueService.EnqueueBatch:input_type -> queue.v1.EnqueueBatchRequest
-	12, // 13: queue.v1.QueueService.Dequeue:input_type -> queue.v1.DequeueRequest
-	15, // 14: queue.v1.QueueService.Ack:input_type -> queue.v1.AckRequest
-	17, // 15: queue.v1.QueueService.Nack:input_type -> queue.v1.NackRequest
-	19, // 16: queue.v1.QueueService.Peek:input_type -> queue.v1.PeekRequest
-	21, // 17: queue.v1.QueueService.Renew:input_type -> queue.v1.RenewRequest
-	23, // 18: queue.v1.QueueService.Status:input_type -> queue.v1.StatusRequest
-	0,  // 19: queue.v1.QueueService.StatusAll:input_type -> queue.v1.EmptyRequest
-	1,  // 20: queue.v1.QueueService.HealthCheck:output_type -> queue.v1.HealthResponse
-	3,  // 21: queue.v1.QueueService.CreateQueue:output_type -> queue.v1.CreateQueueResponse
-	5,  // 22: queue.v1.QueueService.DeleteQueue:output_type -> queue.v1.DeleteQueueResponse
-	8,  // 23: queue.v1.QueueService.Enqueue:output_type -> queue.v1.EnqueueResponse
-	10, // 24: queue.v1.QueueService.EnqueueBatch:output_type -> queue.v1.EnqueueBatchResponse
-	14, // 25: queue.v1.QueueService.Dequeue:output_type -> queue.v1.DequeueResponse
-	16, // 26: queue.v1.QueueService.Ack:output_type -> queue.v1.AckResponse
-	18, // 27: queue.v1.QueueService.Nack:output_type -> queue.v1.NackResponse
-	20, // 28: queue.v1.QueueService.Peek:output_type -> queue.v1.PeekResponse
-	22, // 29: queue.v1.QueueService.Renew:output_type -> queue.v1.RenewResponse
-	24, // 30: queue.v1.QueueService.Status:output_type -> queue.v1.StatusResponse
-	26, // 31: queue.v1.QueueService.StatusAll:output_type -> queue.v1.StatusAllResponse
-	20, // [20:32] is the sub-list for method output_type
-	8,  // [8:20] is the sub-list for method input_type
-	8,  // [8:8] is the sub-list for extension type_name
-	8,  // [8:8] is the sub-list for extension extendee
-	0,  // [0:8] is the sub-list for field type_name
+	20, // 4: queue.v1.PeekRequest.options:type_name -> queue.v1.PeekOptions
+	13, // 5: queue.v1.PeekResponse.message:type_name -> queue.v1.DequeueMessage
+	26, // 6: queue.v1.StatusResponse.queue_status:type_name -> queue.v1.QueueStatus
+	28, // 7: queue.v1.StatusAllResponse.queue_statuses:type_name -> queue.v1.StatusAllResponse.QueueStatusesEntry
+	26, // 8: queue.v1.StatusAllResponse.QueueStatusesEntry.value:type_name -> queue.v1.QueueStatus
+	0,  // 9: queue.v1.QueueService.HealthCheck:input_type -> queue.v1.EmptyRequest
+	2,  // 10: queue.v1.QueueService.CreateQueue:input_type -> queue.v1.CreateQueueRequest
+	4,  // 11: queue.v1.QueueService.DeleteQueue:input_type -> queue.v1.DeleteQueueRequest
+	6,  // 12: queue.v1.QueueService.Enqueue:input_type -> queue.v1.EnqueueRequest
+	9,  // 13: queue.v1.QueueService.EnqueueBatch:input_type -> queue.v1.EnqueueBatchRequest
+	12, // 14: queue.v1.QueueService.Dequeue:input_type -> queue.v1.DequeueRequest
+	15, // 15: queue.v1.QueueService.Ack:input_type -> queue.v1.AckRequest
+	17, // 16: queue.v1.QueueService.Nack:input_type -> queue.v1.NackRequest
+	19, // 17: queue.v1.QueueService.Peek:input_type -> queue.v1.PeekRequest
+	22, // 18: queue.v1.QueueService.Renew:input_type -> queue.v1.RenewRequest
+	24, // 19: queue.v1.QueueService.Status:input_type -> queue.v1.StatusRequest
+	0,  // 20: queue.v1.QueueService.StatusAll:input_type -> queue.v1.EmptyRequest
+	1,  // 21: queue.v1.QueueService.HealthCheck:output_type -> queue.v1.HealthResponse
+	3,  // 22: queue.v1.QueueService.CreateQueue:output_type -> queue.v1.CreateQueueResponse
+	5,  // 23: queue.v1.QueueService.DeleteQueue:output_type -> queue.v1.DeleteQueueResponse
+	8,  // 24: queue.v1.QueueService.Enqueue:output_type -> queue.v1.EnqueueResponse
+	10, // 25: queue.v1.QueueService.EnqueueBatch:output_type -> queue.v1.EnqueueBatchResponse
+	14, // 26: queue.v1.QueueService.Dequeue:output_type -> queue.v1.DequeueResponse
+	16, // 27: queue.v1.QueueService.Ack:output_type -> queue.v1.AckResponse
+	18, // 28: queue.v1.QueueService.Nack:output_type -> queue.v1.NackResponse
+	21, // 29: queue.v1.QueueService.Peek:output_type -> queue.v1.PeekResponse
+	23, // 30: queue.v1.QueueService.Renew:output_type -> queue.v1.RenewResponse
+	25, // 31: queue.v1.QueueService.Status:output_type -> queue.v1.StatusResponse
+	27, // 32: queue.v1.QueueService.StatusAll:output_type -> queue.v1.StatusAllResponse
+	21, // [21:33] is the sub-list for method output_type
+	9,  // [9:21] is the sub-list for method input_type
+	9,  // [9:9] is the sub-list for extension type_name
+	9,  // [9:9] is the sub-list for extension extendee
+	0,  // [0:9] is the sub-list for field type_name
 }
 
 func init() { file_proto_queue_proto_init() }
@@ -1732,7 +1817,7 @@ func file_proto_queue_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_queue_proto_rawDesc), len(file_proto_queue_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   28,
+			NumMessages:   29,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

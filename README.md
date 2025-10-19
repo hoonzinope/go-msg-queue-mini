@@ -11,7 +11,7 @@
 - **처리 보장**: Ack/Nack, Inflight, DLQ, 재시도(backoff + jitter)
 - **지연 전송**: `delay` 파라미터로 메시지 가시 시점을 예약 (예: "10s", "5m", "1h30m")
 - **리스/갱신**: 메시지 점유 기간(lease)과 `/renew`를 통한 연장
-- **미리보기/피킹**: 할당 없이 확인하는 `/peek`
+- **미리보기/피킹**: `/peek` 옵션으로 최대 100개 메시지 확인, 페이징/미리보기 지원
 - **상태 확인**: 합계/ACK/Inflight/DLQ를 반환하는 `/status`
 - **배치 Enqueue**: `/enqueue/batch` 및 gRPC `EnqueueBatch`로 여러 메시지를 일괄 적재하며 `stopOnFailure`/`partialSuccess` 모드를 지원
 - **중복 방지**: `deduplication_id`를 지정하면 동일 큐에서 1시간 동안 같은 ID가 재적재되지 않아 FIFO 기반 멱등성을 제공
@@ -171,7 +171,8 @@ grpc:
   - 내부적으로 백오프 + 지터가 적용되며, `max-retry` 초과 시 DLQ로 이동
 
 - Peek: `POST /api/v1/:queue_name/peek`
-  - 요청: `{ "group": "g1" }` (할당/리스 없이 가장 앞 메시지 확인)
+  - 요청: `{ "group": "g1", "options": { "limit": 3, "cursor": 25, "order": "asc", "preview": true } }`
+  - 설명: `limit`은 기본 1(최대 100), `cursor`로 메시지 ID 기준 페이징, `order`는 `asc`/`desc`, `preview`는 페이로드를 50자 미리보기로 반환
   - 빈 큐: `204 No Content`
 
 - Renew: `POST /api/v1/:queue_name/renew` (헤더: `X-API-Key` 필요)
@@ -187,6 +188,7 @@ grpc:
 - 활성화: `grpc.enabled: true`, 포트 기본 `50051`.
 - 헬스체크: `queue.v1.QueueService/HealthCheck` → `{ status: "ok" }`.
 - 주요 RPC: `CreateQueue`, `DeleteQueue`, `Enqueue`, `EnqueueBatch`, `Dequeue`, `Ack`, `Nack`, `Peek`, `Renew`, `Status` (proto: `proto/queue.proto`).
+- Peek 요청은 선택적 `options`(`limit`, `cursor`, `order`, `preview`)로 최대 100개 메시지를 조회하거나 페이로드 미리보기를 제공합니다.
 - 메시지 타입: gRPC `message` 필드는 문자열(string)이며, HTTP는 임의의 JSON을 지원합니다.
 - `Enqueue`/`EnqueueBatch` 요청은 선택적 `delay`(Go duration 문자열)와 `deduplication_id`(문자열)로 메시지 가시 시점을 예약하거나 1시간 멱등성을 적용할 수 있으며, 생략 시 즉시 처리됩니다.
 - `EnqueueBatch` 호출 시 `mode`를 `stopOnFailure` 또는 `partialSuccess`로 지정하고, 응답은 `failure_count`/`failed_messages`를 통해 부분 실패를 보고합니다. `stopOnFailure`에서 오류가 발생하면 전체 호출이 실패(5xx)로 끝납니다.

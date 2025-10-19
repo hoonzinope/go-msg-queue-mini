@@ -35,6 +35,6 @@ type Queue interface {
 	Nack(queue_name string, group_name string, messageID int64, receipt string) error
 	Shutdown() error
 	// new api
-	Peek(queue_name string, group_name string) (QueueMessage, error)
+	// Peek(queue_name string, group_name string) (QueueMessage, error)
 	Renew(queue_name string, group_name string, messageID int64, receipt string, extendSec int) error
 }

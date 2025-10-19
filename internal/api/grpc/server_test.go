@@ -55,11 +55,15 @@ func (m *mockQueue) Status(string) (internal.QueueStatus, error) {
 	return internal.QueueStatus{}, nil
 }
 
-func (m *mockQueue) Shutdown() error { return nil }
-
-func (m *mockQueue) Peek(string, string) (internal.QueueMessage, error) {
-	return internal.QueueMessage{}, queue_error.ErrEmpty
+func (m *mockQueue) StatusAll() (map[string]internal.QueueStatus, error) {
+	return map[string]internal.QueueStatus{}, nil
 }
+
+func (m *mockQueue) Peek(string, string, internal.PeekOptions) ([]internal.QueueMessage, error) {
+	return nil, queue_error.ErrEmpty
+}
+
+func (m *mockQueue) Shutdown() error { return nil }
 
 func (m *mockQueue) Renew(string, string, int64, string, int) error { return nil }
 
@@ -73,6 +77,15 @@ type mockQueueInspector struct {
 	statusError     error
 	statusAllResult map[string]internal.QueueStatus
 	statusAllError  error
+	peekMessages    []internal.QueueMessage
+	peekError       error
+	peekCalls       []peekCall
+}
+
+type peekCall struct {
+	queueName string
+	group     string
+	options   internal.PeekOptions
 }
 
 func (m *mockQueueInspector) Status(string) (internal.QueueStatus, error) {
@@ -81,6 +94,18 @@ func (m *mockQueueInspector) Status(string) (internal.QueueStatus, error) {
 
 func (m *mockQueueInspector) StatusAll() (map[string]internal.QueueStatus, error) {
 	return m.statusAllResult, m.statusAllError
+}
+
+func (m *mockQueueInspector) Peek(queueName, group string, options internal.PeekOptions) ([]internal.QueueMessage, error) {
+	m.peekCalls = append(m.peekCalls, peekCall{
+		queueName: queueName,
+		group:     group,
+		options:   options,
+	})
+	if m.peekError != nil {
+		return nil, m.peekError
+	}
+	return m.peekMessages, nil
 }
 
 func TestQueueServiceEnqueueBatchSuccess(t *testing.T) {
@@ -300,5 +325,84 @@ func TestQueueServiceStatusAllError(t *testing.T) {
 	}
 	if !errors.Is(err, inspector.statusAllError) {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestQueueServicePeekSuccess(t *testing.T) {
+	mq := &mockQueue{}
+	server := newTestGRPCServer(mq)
+	inspector := &mockQueueInspector{
+		peekMessages: []internal.QueueMessage{
+			{ID: 201, Payload: "alpha", Receipt: "ra"},
+			{ID: 202, Payload: "beta", Receipt: "rb"},
+		},
+	}
+	server.QueueInspector = inspector
+
+	req := &PeekRequest{
+		QueueName: "tasks",
+		Group:     "group-A",
+		Options: &PeekOptions{
+			Limit:  2,
+			Cursor: 10,
+			Order:  "desc",
+		},
+	}
+
+	resp, err := server.Peek(context.Background(), req)
+	if err != nil {
+		t.Fatalf("peek returned error: %v", err)
+	}
+	if resp.GetStatus() != "ok" {
+		t.Fatalf("response status = %s, want ok", resp.GetStatus())
+	}
+	if len(resp.GetMessage()) != 2 {
+		t.Fatalf("message count = %d, want 2", len(resp.GetMessage()))
+	}
+	first := resp.GetMessage()[0]
+	if first.GetId() != 201 || first.GetReceipt() != "ra" || first.GetPayload() != "alpha" {
+		t.Fatalf("unexpected first message: %#v", first)
+	}
+	if len(inspector.peekCalls) != 1 {
+		t.Fatalf("peek call count = %d, want 1", len(inspector.peekCalls))
+	}
+	call := inspector.peekCalls[0]
+	if call.queueName != "tasks" {
+		t.Fatalf("queue name = %s, want tasks", call.queueName)
+	}
+	if call.group != "group-A" {
+		t.Fatalf("group = %s, want group-A", call.group)
+	}
+	if call.options.Limit != 2 || call.options.Cursor != 10 || call.options.Order != "desc" {
+		t.Fatalf("unexpected peek options: %+v", call.options)
+	}
+}
+
+func TestQueueServicePeekEmptyQueue(t *testing.T) {
+	mq := &mockQueue{}
+	server := newTestGRPCServer(mq)
+	inspector := &mockQueueInspector{
+		peekError: queue_error.ErrNoMessage,
+	}
+	server.QueueInspector = inspector
+
+	req := &PeekRequest{
+		QueueName: "tasks",
+		Group:     "group-A",
+		Options:   &PeekOptions{},
+	}
+
+	resp, err := server.Peek(context.Background(), req)
+	if err == nil {
+		t.Fatalf("expected error for empty queue")
+	}
+	if !errors.Is(err, queue_error.ErrNoMessage) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp != nil {
+		t.Fatalf("expected nil response on error")
+	}
+	if len(inspector.peekCalls) != 1 {
+		t.Fatalf("peek call count = %d, want 1", len(inspector.peekCalls))
 	}
 }

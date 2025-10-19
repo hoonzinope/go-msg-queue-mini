@@ -10,6 +10,9 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+const peekMaxLimit = 100
+const peekMsgPreviewLength = 50
+
 func healthCheckHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
@@ -265,9 +268,35 @@ func (h *httpServerInstance) peekHandler(c *gin.Context) {
 		return
 	}
 
-	message, err := h.Queue.Peek(queue_name, req.Group)
+	// if peekRequest.Options is not empty, convert PeekRequest.Options to internal.PeekOptions
+	peekOptions := internal.PeekOptions{
+		Limit:   1,
+		Order:   "asc",
+		Cursor:  0,
+		Preview: false,
+	}
+	if req.Options != (PeekOptions{}) {
+		if req.Options.Limit > 0 {
+			if req.Options.Limit > peekMaxLimit {
+				peekOptions.Limit = peekMaxLimit
+			} else {
+				peekOptions.Limit = req.Options.Limit
+			}
+		}
+		if req.Options.Order != "" {
+			peekOptions.Order = req.Options.Order
+		}
+		if req.Options.Cursor > 0 {
+			peekOptions.Cursor = req.Options.Cursor
+		}
+		if req.Options.Preview {
+			peekOptions.Preview = req.Options.Preview
+		}
+	}
+
+	messages, err := h.QueueInspector.Peek(queue_name, req.Group, peekOptions)
 	if err != nil {
-		if errors.Is(err, queue_error.ErrEmpty) {
+		if errors.Is(err, queue_error.ErrEmpty) || errors.Is(err, queue_error.ErrNoMessage) {
 			c.Status(http.StatusNoContent)
 			return
 		}
@@ -275,14 +304,35 @@ func (h *httpServerInstance) peekHandler(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to peek message"})
 		return
 	}
+	var dequeueMessages []DequeueMessage
+	for _, msg := range messages {
+		var payloadStr string
+		switch v := msg.Payload.(type) {
+		case string:
+			payloadStr = v
+		case json.RawMessage:
+			payloadStr = string(v)
+		default:
+			payloadBytes, _ := json.Marshal(v)
+			payloadStr = string(payloadBytes)
+		}
+		// and payload preview handling
+		if peekOptions.Preview {
+			if len(payloadStr) > peekMsgPreviewLength {
+				payloadStr = payloadStr[:peekMsgPreviewLength] + "..."
+			}
+		}
+
+		dequeueMessages = append(dequeueMessages, DequeueMessage{
+			ID:      msg.ID,
+			Payload: msg.Payload,
+			Receipt: msg.Receipt,
+		})
+	}
 
 	c.JSON(http.StatusOK, PeekResponse{
-		Status: "ok",
-		Message: DequeueMessage{
-			Payload: message.Payload,
-			Receipt: message.Receipt,
-			ID:      message.ID,
-		},
+		Status:   "ok",
+		Messages: dequeueMessages,
 	})
 }
 
