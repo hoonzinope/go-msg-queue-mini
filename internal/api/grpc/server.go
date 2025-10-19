@@ -2,6 +2,7 @@ package grpc
 
 import (
 	context "context"
+	"encoding/json"
 	"fmt"
 	"go-msg-queue-mini/internal"
 	"log/slog"
@@ -16,6 +17,8 @@ type queueServiceServer struct {
 	internal.QueueInspector
 	Logger *slog.Logger
 }
+
+const peekMaxLimit = 100
 
 func StartServer(ctx context.Context, config *internal.Config, queue internal.Queue, logger *slog.Logger) error {
 	addr := fmt.Sprintf(":%d", config.GRPC.Port)
@@ -202,11 +205,29 @@ func (qs *queueServiceServer) Nack(ctx context.Context, req *NackRequest) (res *
 }
 
 func (qs *queueServiceServer) Peek(ctx context.Context, req *PeekRequest) (res *PeekResponse, err error) {
+
 	peekOptions := internal.PeekOptions{
-		Limit:   int(req.Options.Limit),
-		Cursor:  req.Options.Cursor,
-		Order:   req.Options.Order,
-		Preview: req.Options.Preview,
+		Limit:   1,
+		Cursor:  0,
+		Order:   "asc",
+		Preview: false,
+	}
+	if req.Options != nil {
+		if req.Options.Limit > 0 {
+			peekOptions.Limit = int(req.Options.Limit)
+		} else if req.Options.Limit > peekMaxLimit {
+			peekOptions.Limit = peekMaxLimit
+		}
+
+		if req.Options.Cursor > 0 {
+			peekOptions.Cursor = req.Options.Cursor
+		}
+		if req.Options.Order != "" {
+			peekOptions.Order = req.Options.Order
+		}
+		if req.Options.Preview {
+			peekOptions.Preview = req.Options.Preview
+		}
 	}
 
 	messages, err := qs.QueueInspector.Peek(req.QueueName, req.Group, peekOptions)
@@ -216,9 +237,17 @@ func (qs *queueServiceServer) Peek(ctx context.Context, req *PeekRequest) (res *
 	}
 	dequeueMessages := make([]*DequeueMessage, len(messages))
 	for i, msg := range messages {
+		// convert payload to string or json
+		payloadBytes, err := json.Marshal(msg.Payload)
+		if err != nil {
+			qs.Logger.Error("Error marshalling message payload", "error", err)
+			return nil, fmt.Errorf("invalid payload type")
+		}
+
+		// and payload preview handling
 		dequeueMessages[i] = &DequeueMessage{
 			Id:      msg.ID,
-			Payload: msg.Payload.(string),
+			Payload: string(payloadBytes),
 			Receipt: msg.Receipt,
 		}
 	}

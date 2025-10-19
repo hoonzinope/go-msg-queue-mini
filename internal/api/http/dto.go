@@ -85,7 +85,7 @@ type StatusAllResponse struct {
 
 type PeekRequest struct {
 	Group   string      `json:"group" binding:"required"`
-	Options PeekOptions `json:"options" binding:"required"`
+	Options PeekOptions `json:"options"`
 }
 
 type PeekOptions struct {

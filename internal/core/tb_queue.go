@@ -6,6 +6,7 @@ import (
 	"go-msg-queue-mini/internal"
 	queue_error "go-msg-queue-mini/internal/queue_error"
 	"go-msg-queue-mini/util"
+	"strings"
 )
 
 // create queue msg table
@@ -339,42 +340,35 @@ func (m *FileDBManager) peekCandidateQueueMsgsWithOptions(tx *sql.Tx, queueInfoI
 			AND (i.q_id IS NULL OR i.lease_until <= CURRENT_TIMESTAMP)
 			AND q.partition_id = ?
 		`
-	// cursor & order
-	if options.Cursor != 0 {
-		cursorID := options.Cursor
-		switch {
-		case options.Order == "asc":
-			query += fmt.Sprintf(" AND q.id > %d", cursorID)
-			query += " ORDER BY q.id ASC"
-		case options.Order == "desc":
-			query += fmt.Sprintf(" AND q.id < %d", cursorID)
-			query += " ORDER BY q.id DESC"
-		default:
-			query += fmt.Sprintf(" AND q.id > %d", cursorID)
-			query += " ORDER BY q.id ASC"
-		}
-	} else {
-		switch {
-		case options.Order == "asc":
-			query += " ORDER BY q.id ASC"
-		case options.Order == "desc":
-			query += " ORDER BY q.id DESC"
-		default:
-			query += " ORDER BY q.id ASC"
-		}
-	}
 
-	// limit
+	args := []interface{}{
+		group, partitionID,
+		group, partitionID,
+		queueInfoID,
+		partitionID,
+	}
+	orderDirection := "ASC"
+	if strings.ToLower(options.Order) == "desc" {
+		orderDirection = "DESC"
+	}
+	limit := 1
 	if options.Limit > 0 {
-		query += fmt.Sprintf(" LIMIT %d", options.Limit)
-	} else {
-		query += " LIMIT 1" // default limit
+		limit = options.Limit
 	}
 
-	rows, err := tx.Query(query,
-		group, partitionID,
-		group, partitionID,
-		queueInfoID, partitionID)
+	if options.Cursor > 0 {
+		if orderDirection == "ASC" {
+			query += " AND q.id > ? "
+		} else {
+			query += " AND q.id < ? "
+		}
+		args = append(args, options.Cursor)
+	}
+	query += " ORDER BY q.id " + orderDirection + " "
+	query += " LIMIT ?"
+	args = append(args, limit)
+
+	rows, err := tx.Query(query, args...)
 	if err != nil {
 		return nil, err
 	}

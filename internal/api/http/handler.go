@@ -10,6 +10,8 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+const peekMaxLimit = 100
+
 func healthCheckHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
@@ -265,12 +267,28 @@ func (h *httpServerInstance) peekHandler(c *gin.Context) {
 		return
 	}
 
-	// convert PeekRequest.Options to internal.PeekOptions
+	// if peekRequest.Options is not empty, convert PeekRequest.Options to internal.PeekOptions
 	peekOptions := internal.PeekOptions{
-		Limit:   req.Options.Limit,
-		Cursor:  req.Options.Cursor,
-		Order:   req.Options.Order,
-		Preview: req.Options.Preview,
+		Limit:   1,
+		Order:   "asc",
+		Cursor:  0,
+		Preview: false,
+	}
+	if req.Options != (PeekOptions{}) {
+		if req.Options.Limit > 0 {
+			peekOptions.Limit = req.Options.Limit
+		} else if req.Options.Limit > peekMaxLimit {
+			peekOptions.Limit = peekMaxLimit
+		}
+		if req.Options.Order != "" {
+			peekOptions.Order = req.Options.Order
+		}
+		if req.Options.Cursor > 0 {
+			peekOptions.Cursor = req.Options.Cursor
+		}
+		if req.Options.Preview {
+			peekOptions.Preview = req.Options.Preview
+		}
 	}
 
 	messages, err := h.QueueInspector.Peek(queue_name, req.Group, peekOptions)
