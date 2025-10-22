@@ -319,8 +319,14 @@ func (h *httpServerInstance) peekHandler(c *gin.Context) {
 				payloadBytes, _ := json.Marshal(v)
 				payloadStr = string(payloadBytes)
 			}
+			// cut preview length with rune safety
 			if len(payloadStr) > peekMsgPreviewLength {
-				payloadStr = payloadStr[:peekMsgPreviewLength] + "..."
+				runes := []rune(payloadStr)
+				if len(runes) > peekMsgPreviewLength {
+					payloadStr = string(runes[:peekMsgPreviewLength]) + "..."
+				} else {
+					payloadStr = string(runes) + "..."
+				}
 			}
 			payload = payloadStr
 		}
