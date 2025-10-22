@@ -306,26 +306,27 @@ func (h *httpServerInstance) peekHandler(c *gin.Context) {
 	}
 	var dequeueMessages []DequeueMessage
 	for _, msg := range messages {
-		var payloadStr string
-		switch v := msg.Payload.(type) {
-		case string:
-			payloadStr = v
-		case json.RawMessage:
-			payloadStr = string(v)
-		default:
-			payloadBytes, _ := json.Marshal(v)
-			payloadStr = string(payloadBytes)
-		}
-		// and payload preview handling
+		// payload preview handling
+		payload := msg.Payload
 		if peekOptions.Preview {
+			var payloadStr string
+			switch v := msg.Payload.(type) {
+			case string:
+				payloadStr = v
+			case json.RawMessage:
+				payloadStr = string(v)
+			default:
+				payloadBytes, _ := json.Marshal(v)
+				payloadStr = string(payloadBytes)
+			}
 			if len(payloadStr) > peekMsgPreviewLength {
 				payloadStr = payloadStr[:peekMsgPreviewLength] + "..."
 			}
+			payload = payloadStr
 		}
-
 		dequeueMessages = append(dequeueMessages, DequeueMessage{
 			ID:      msg.ID,
-			Payload: payloadStr,
+			Payload: payload,
 			Receipt: msg.Receipt,
 		})
 	}
