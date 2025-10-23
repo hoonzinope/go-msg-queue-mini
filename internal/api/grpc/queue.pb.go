@@ -336,7 +336,7 @@ func (x *EnqueueRequest) GetMessage() *EnqueueMessage {
 
 type EnqueueMessage struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
-	Message         string                 `protobuf:"bytes,1,opt,name=message,proto3" json:"message,omitempty"`
+	Message         []byte                 `protobuf:"bytes,1,opt,name=message,proto3" json:"message,omitempty"`
 	Delay           string                 `protobuf:"bytes,2,opt,name=delay,proto3" json:"delay,omitempty"`                                            // optional, e.g., "5s","10m"
 	DeduplicationId string                 `protobuf:"bytes,3,opt,name=deduplication_id,json=deduplicationId,proto3" json:"deduplication_id,omitempty"` // optional
 	unknownFields   protoimpl.UnknownFields
@@ -373,11 +373,11 @@ func (*EnqueueMessage) Descriptor() ([]byte, []int) {
 	return file_proto_queue_proto_rawDescGZIP(), []int{7}
 }
 
-func (x *EnqueueMessage) GetMessage() string {
+func (x *EnqueueMessage) GetMessage() []byte {
 	if x != nil {
 		return x.Message
 	}
-	return ""
+	return nil
 }
 
 func (x *EnqueueMessage) GetDelay() string {
@@ -399,7 +399,7 @@ type EnqueueResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Status        string                 `protobuf:"bytes,1,opt,name=status,proto3" json:"status,omitempty"` // e.g., "enqueued"
 	QueueName     string                 `protobuf:"bytes,2,opt,name=queue_name,json=queueName,proto3" json:"queue_name,omitempty"`
-	Message       string                 `protobuf:"bytes,3,opt,name=message,proto3" json:"message,omitempty"` // 원본 페이로드 에코백
+	Message       []byte                 `protobuf:"bytes,3,opt,name=message,proto3" json:"message,omitempty"` // 원본 페이로드 에코백
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -448,11 +448,11 @@ func (x *EnqueueResponse) GetQueueName() string {
 	return ""
 }
 
-func (x *EnqueueResponse) GetMessage() string {
+func (x *EnqueueResponse) GetMessage() []byte {
 	if x != nil {
 		return x.Message
 	}
-	return ""
+	return nil
 }
 
 // EnqueueBatch request
@@ -597,7 +597,7 @@ func (x *EnqueueBatchResponse) GetFailedMessages() []*FailedMessage {
 type FailedMessage struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Index         int64                  `protobuf:"varint,1,opt,name=index,proto3" json:"index,omitempty"`
-	Message       string                 `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`
+	Message       []byte                 `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`
 	Error         string                 `protobuf:"bytes,3,opt,name=error,proto3" json:"error,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -640,11 +640,11 @@ func (x *FailedMessage) GetIndex() int64 {
 	return 0
 }
 
-func (x *FailedMessage) GetMessage() string {
+func (x *FailedMessage) GetMessage() []byte {
 	if x != nil {
 		return x.Message
 	}
-	return ""
+	return nil
 }
 
 func (x *FailedMessage) GetError() string {
@@ -718,7 +718,7 @@ func (x *DequeueRequest) GetConsumerId() string {
 // HTTP: DequeueMessage{ payload, receipt, id }
 type DequeueMessage struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Payload       string                 `protobuf:"bytes,1,opt,name=payload,proto3" json:"payload,omitempty"`
+	Payload       []byte                 `protobuf:"bytes,1,opt,name=payload,proto3" json:"payload,omitempty"`
 	Receipt       string                 `protobuf:"bytes,2,opt,name=receipt,proto3" json:"receipt,omitempty"`
 	Id            int64                  `protobuf:"varint,3,opt,name=id,proto3" json:"id,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -755,11 +755,11 @@ func (*DequeueMessage) Descriptor() ([]byte, []int) {
 	return file_proto_queue_proto_rawDescGZIP(), []int{13}
 }
 
-func (x *DequeueMessage) GetPayload() string {
+func (x *DequeueMessage) GetPayload() []byte {
 	if x != nil {
 		return x.Payload
 	}
-	return ""
+	return nil
 }
 
 func (x *DequeueMessage) GetReceipt() string {
@@ -1608,14 +1608,14 @@ const file_proto_queue_proto_rawDesc = "" +
 	"queue_name\x18\x01 \x01(\tR\tqueueName\x122\n" +
 	"\amessage\x18\x02 \x01(\v2\x18.queue.v1.EnqueueMessageR\amessage\"k\n" +
 	"\x0eEnqueueMessage\x12\x18\n" +
-	"\amessage\x18\x01 \x01(\tR\amessage\x12\x14\n" +
+	"\amessage\x18\x01 \x01(\fR\amessage\x12\x14\n" +
 	"\x05delay\x18\x02 \x01(\tR\x05delay\x12)\n" +
 	"\x10deduplication_id\x18\x03 \x01(\tR\x0fdeduplicationId\"b\n" +
 	"\x0fEnqueueResponse\x12\x16\n" +
 	"\x06status\x18\x01 \x01(\tR\x06status\x12\x1d\n" +
 	"\n" +
 	"queue_name\x18\x02 \x01(\tR\tqueueName\x12\x18\n" +
-	"\amessage\x18\x03 \x01(\tR\amessage\"~\n" +
+	"\amessage\x18\x03 \x01(\fR\amessage\"~\n" +
 	"\x13EnqueueBatchRequest\x12\x1d\n" +
 	"\n" +
 	"queue_name\x18\x01 \x01(\tR\tqueueName\x12\x12\n" +
@@ -1630,7 +1630,7 @@ const file_proto_queue_proto_rawDesc = "" +
 	"\x0ffailed_messages\x18\x05 \x03(\v2\x17.queue.v1.FailedMessageR\x0efailedMessages\"U\n" +
 	"\rFailedMessage\x12\x14\n" +
 	"\x05index\x18\x01 \x01(\x03R\x05index\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessage\x12\x14\n" +
+	"\amessage\x18\x02 \x01(\fR\amessage\x12\x14\n" +
 	"\x05error\x18\x03 \x01(\tR\x05error\"f\n" +
 	"\x0eDequeueRequest\x12\x1d\n" +
 	"\n" +
@@ -1639,7 +1639,7 @@ const file_proto_queue_proto_rawDesc = "" +
 	"\vconsumer_id\x18\x03 \x01(\tR\n" +
 	"consumerId\"T\n" +
 	"\x0eDequeueMessage\x12\x18\n" +
-	"\apayload\x18\x01 \x01(\tR\apayload\x12\x18\n" +
+	"\apayload\x18\x01 \x01(\fR\apayload\x12\x18\n" +
 	"\areceipt\x18\x02 \x01(\tR\areceipt\x12\x0e\n" +
 	"\x02id\x18\x03 \x01(\x03R\x02id\"]\n" +
 	"\x0fDequeueResponse\x12\x16\n" +

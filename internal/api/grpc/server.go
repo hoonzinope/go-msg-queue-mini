@@ -2,9 +2,9 @@ package grpc
 
 import (
 	context "context"
-	"encoding/json"
 	"fmt"
 	"go-msg-queue-mini/internal"
+	"go-msg-queue-mini/util"
 	"log/slog"
 	"net"
 
@@ -154,7 +154,7 @@ func (qs *queueServiceServer) EnqueueBatch(ctx context.Context, req *EnqueueBatc
 	for i, fm := range batchResult.FailedMessages {
 		failedMessages[i] = &FailedMessage{
 			Index:   fm.Index,
-			Message: fm.Message.(string),
+			Message: fm.Message,
 			Error:   fm.Reason,
 		}
 	}
@@ -176,7 +176,7 @@ func (qs *queueServiceServer) Dequeue(ctx context.Context, req *DequeueRequest) 
 	}
 	DequeueMessage := &DequeueMessage{
 		Id:      message.ID,
-		Payload: message.Payload.(string),
+		Payload: message.Payload,
 		Receipt: message.Receipt,
 	}
 	return &DequeueResponse{
@@ -240,26 +240,15 @@ func (qs *queueServiceServer) Peek(ctx context.Context, req *PeekRequest) (res *
 	dequeueMessages := make([]*DequeueMessage, len(messages))
 	for i, msg := range messages {
 		// convert payload to string or json
-		var payloadStr string
-		switch v := msg.Payload.(type) {
-		case string:
-			payloadStr = v
-		case json.RawMessage:
-			payloadStr = string(v)
-		default:
-			payloadBytes, _ := json.Marshal(v)
-			payloadStr = string(payloadBytes)
-		}
+		payloadStr := string(msg.Payload)
 		// and payload preview handling
 		if peekOptions.Preview {
-			if len(payloadStr) > peekMsgPreviewLength {
-				payloadStr = payloadStr[:peekMsgPreviewLength] + "..."
-			}
+			payloadStr = util.PreviewStringRuneSafe(payloadStr, peekMsgPreviewLength)
 		}
 
 		dequeueMessages[i] = &DequeueMessage{
 			Id:      msg.ID,
-			Payload: payloadStr,
+			Payload: []byte(payloadStr),
 			Receipt: msg.Receipt,
 		}
 	}

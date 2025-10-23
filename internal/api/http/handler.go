@@ -5,6 +5,7 @@ import (
 	"errors"
 	"go-msg-queue-mini/internal"
 	"go-msg-queue-mini/internal/queue_error"
+	"go-msg-queue-mini/util"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -136,7 +137,7 @@ func (h *httpServerInstance) enqueueBatchHandler(c *gin.Context) {
 		for i, fm := range batchResult.FailedMessages {
 			resp.FailedMessages[i] = FailedMessage{
 				Index:   fm.Index,
-				Message: string(fm.Message.(json.RawMessage)),
+				Message: fm.Message,
 				Error:   fm.Reason,
 			}
 		}
@@ -306,29 +307,17 @@ func (h *httpServerInstance) peekHandler(c *gin.Context) {
 	}
 	var dequeueMessages []DequeueMessage
 	for _, msg := range messages {
+		raw := msg.Payload
+
 		// payload preview handling
-		payload := msg.Payload
 		if peekOptions.Preview {
-			var payloadStr string
-			switch v := msg.Payload.(type) {
-			case string:
-				payloadStr = v
-			case json.RawMessage:
-				payloadStr = string(v)
-			default:
-				payloadBytes, _ := json.Marshal(v)
-				payloadStr = string(payloadBytes)
-			}
-			// cut preview length with rune safety
-			runes := []rune(payloadStr)
-			if len(runes) > peekMsgPreviewLength {
-				payloadStr = string(runes[:peekMsgPreviewLength]) + "..."
-			}
-			payload = payloadStr
+			var payloadStr string = util.PreviewStringRuneSafe(string(raw), peekMsgPreviewLength)
+			raw = json.RawMessage([]byte(payloadStr))
 		}
+
 		dequeueMessages = append(dequeueMessages, DequeueMessage{
 			ID:      msg.ID,
-			Payload: payload,
+			Payload: raw,
 			Receipt: msg.Receipt,
 		})
 	}

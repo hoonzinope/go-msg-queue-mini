@@ -4,7 +4,7 @@ import (
 	"math/rand"
 )
 
-func GenerateItem() interface{} {
+func GenerateItem() string {
 	// timestamp := time.Now().Format("2006-01-02 15:04:05")
 	message := _stringWithCharset(GenerateNumber(2, 20), charset) // Generate a random message of 20 characters
 	return message

@@ -34,9 +34,9 @@ type EnqueueBatchResponse struct {
 }
 
 type FailedMessage struct {
-	Index   int64  `json:"index"`
-	Message string `json:"message"`
-	Error   string `json:"error"`
+	Index   int64           `json:"index"`
+	Message json.RawMessage `json:"message"`
+	Error   string          `json:"error"`
 }
 
 type DequeueRequest struct {
@@ -45,9 +45,9 @@ type DequeueRequest struct {
 }
 
 type DequeueMessage struct {
-	Payload interface{} `json:"payload"`
-	Receipt string      `json:"receipt"`
-	ID      int64       `json:"id"`
+	Payload json.RawMessage `json:"payload"`
+	Receipt string          `json:"receipt"`
+	ID      int64           `json:"id"`
 }
 
 type DequeueResponse struct {

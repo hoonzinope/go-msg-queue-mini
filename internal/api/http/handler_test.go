@@ -155,9 +155,8 @@ func TestEnqueueBatchHandlerSuccess(t *testing.T) {
 	}
 	for i, item := range call.items {
 		exp := expectedItems[i]
-		itemBytes, _ := json.Marshal(item.Item)
-		if !bytes.Equal(itemBytes, exp.Message) {
-			t.Fatalf("item %d = %s, want %s", i, itemBytes, exp.Message)
+		if !bytes.Equal(item.Item, exp.Message) {
+			t.Fatalf("item %d = %s, want %s", i, item.Item, exp.Message)
 		}
 		if item.DeduplicationID != exp.DeduplicationID {
 			t.Fatalf("dedup id %d = %s, want %s", i, item.DeduplicationID, exp.DeduplicationID)
@@ -242,7 +241,7 @@ func TestEnqueueBatchHandlerPartialSuccess(t *testing.T) {
 	if fm.Index != 1 {
 		t.Fatalf("failed message index = %d, want 1", fm.Index)
 	}
-	if fm.Message != "\"bad\"" {
+	if !bytes.Equal(fm.Message, json.RawMessage(`"bad"`)) {
 		t.Fatalf("failed message payload = %s, want \"bad\"", fm.Message)
 	}
 	if fm.Error != "duplicate message" {
@@ -397,8 +396,8 @@ func TestPeekHandlerSuccess(t *testing.T) {
 	mq := &mockQueue{}
 	inspector := &mockQueueInspector{
 		peekMessages: []internal.QueueMessage{
-			{ID: 101, Payload: "alpha", Receipt: "r-1"},
-			{ID: 102, Payload: "beta", Receipt: "r-2"},
+			{ID: 101, Payload: json.RawMessage(`"alpha"`), Receipt: "r-1"},
+			{ID: 102, Payload: json.RawMessage(`"beta"`), Receipt: "r-2"},
 		},
 	}
 	server := newTestHTTPServer(mq)
@@ -453,7 +452,7 @@ func TestPeekHandlerSuccess(t *testing.T) {
 	if len(resp.Messages) != 2 {
 		t.Fatalf("message count = %d, want 2", len(resp.Messages))
 	}
-	if resp.Messages[0].ID != 101 || resp.Messages[0].Receipt != "r-1" || resp.Messages[0].Payload != "alpha" {
+	if resp.Messages[0].ID != 101 || resp.Messages[0].Receipt != "r-1" || !bytes.Equal(resp.Messages[0].Payload, json.RawMessage(`"alpha"`)) {
 		t.Fatalf("unexpected first message: %#v", resp.Messages[0])
 	}
 }
