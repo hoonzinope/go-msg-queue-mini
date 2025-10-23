@@ -16,6 +16,7 @@
 - **배치 Enqueue**: `/enqueue/batch` 및 gRPC `EnqueueBatch`로 여러 메시지를 일괄 적재하며 `stopOnFailure`/`partialSuccess` 모드를 지원
 - **중복 방지**: `deduplication_id`를 지정하면 동일 큐에서 1시간 동안 같은 ID가 재적재되지 않아 FIFO 기반 멱등성을 제공
 - **운영 모드**: `debug` 모드(내장 프로듀서/컨슈머 + 모니터) 또는 HTTP/gRPC 서버
+- **바이너리 안전 페이로드**: 큐 코어와 gRPC API는 페이로드를 `[]byte`로 보관하며, HTTP 계층은 임의의 JSON을 받아 직렬화된 바이트를 전달
 
 ## 빠른 시작(Quick Start)
 
@@ -43,7 +44,7 @@
 ├── proto/
 │   └── queue.proto             # gRPC 프로토 정의
 ├── internal/
-│   ├── queue.go                 # 큐 인터페이스 및 상태 타입
+│   ├── queue.go                 # 큐 인터페이스(`[]byte` 페이로드) 및 상태 타입
 │   ├── config.go                # YAML 설정 로더
 │   ├── config_test.go           # 설정 로더 테스트
 │   ├── api/http/
@@ -188,11 +189,16 @@ grpc:
 - 활성화: `grpc.enabled: true`, 포트 기본 `50051`.
 - 헬스체크: `queue.v1.QueueService/HealthCheck` → `{ status: "ok" }`.
 - 주요 RPC: `CreateQueue`, `DeleteQueue`, `Enqueue`, `EnqueueBatch`, `Dequeue`, `Ack`, `Nack`, `Peek`, `Renew`, `Status` (proto: `proto/queue.proto`).
-- Peek 요청은 선택적 `options`(`limit`, `cursor`, `order`, `preview`)로 최대 100개 메시지를 조회하거나 페이로드 미리보기를 제공합니다.
-- 메시지 타입: gRPC `message` 필드는 문자열(string)이며, HTTP는 임의의 JSON을 지원합니다.
+- Peek 요청은 선택적 `options`(`limit`, `cursor`, `order`, `preview`)로 최대 100개 메시지를 조회하거나 페이로드 미리보기(50자, 초과 시 `...`)를 제공합니다.
+- 메시지 타입: gRPC `message` 필드는 **bytes**이며(JSON 기반 툴에서는 Base64 문자열로 전달), HTTP는 임의의 JSON을 받아 직렬화된 바이트를 저장합니다.
 - `Enqueue`/`EnqueueBatch` 요청은 선택적 `delay`(Go duration 문자열)와 `deduplication_id`(문자열)로 메시지 가시 시점을 예약하거나 1시간 멱등성을 적용할 수 있으며, 생략 시 즉시 처리됩니다.
 - `EnqueueBatch` 호출 시 `mode`를 `stopOnFailure` 또는 `partialSuccess`로 지정하고, 응답은 `failure_count`/`failed_messages`를 통해 부분 실패를 보고합니다. `stopOnFailure`에서 오류가 발생하면 전체 호출이 실패(5xx)로 끝납니다.
-- 호출 예시(grpcurl): `grpcurl -plaintext localhost:50051 list` / `grpcurl -plaintext -d '{"queue_name":"default","message":"hello","delay":"45s"}' localhost:50051 queue.v1.QueueService/Enqueue` / `grpcurl -plaintext -d '{"queue_name":"default","messages":["hi","there"],"delay":"1m"}' localhost:50051 queue.v1.QueueService/EnqueueBatch`.
+- 호출 예시(grpcurl):  
+  - `grpcurl -plaintext localhost:50051 list`  
+  - 지연 enqueue (JSON에서는 Base64 문자열 사용):  
+    `grpcurl -plaintext -d '{"queue_name":"default","message":"aGVsbG8=","delay":"45s"}' localhost:50051 queue.v1.QueueService/Enqueue`  
+  - 배치 enqueue:  
+    `grpcurl -plaintext -d '{"queue_name":"default","mode":"partialSuccess","messages":[{"message":"aGVsbG8="},{"message":"d29ybGQ="}]}' localhost:50051 queue.v1.QueueService/EnqueueBatch`
 
 ## gRPC 인터셉터
 - 로깅: `LoggerInterceptor`가 호출 메서드/소요시간을 기록합니다.
