@@ -1,6 +1,7 @@
 package core
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -52,8 +53,8 @@ func TestFileDBQueueEnqueueBatchSuccess(t *testing.T) {
 
 	mode := "stopOnFailure"
 	batchData := make([]internal.EnqueueMessage, 0)
-	batchData = append(batchData, internal.EnqueueMessage{Item: "first", Delay: "0s", DeduplicationID: "dedup-1"})
-	batchData = append(batchData, internal.EnqueueMessage{Item: map[string]interface{}{"foo": "bar"}, Delay: "0s", DeduplicationID: "dedup-2"})
+	batchData = append(batchData, internal.EnqueueMessage{Item: []byte("first"), Delay: "0s", DeduplicationID: "dedup-1"})
+	batchData = append(batchData, internal.EnqueueMessage{Item: []byte(`{"foo": "bar"}`), Delay: "0s", DeduplicationID: "dedup-2"})
 	batchResult, err := queue.EnqueueBatch(queueName, mode, batchData)
 	if err != nil {
 		t.Fatalf("enqueue batch returned error: %v", err)
@@ -63,8 +64,8 @@ func TestFileDBQueueEnqueueBatchSuccess(t *testing.T) {
 	}
 
 	expected := []internal.EnqueueMessage{
-		{Item: "first", Delay: "0s", DeduplicationID: "dedup-1"},
-		{Item: map[string]interface{}{"foo": "bar"}, Delay: "0s", DeduplicationID: "dedup-2"},
+		{Item: []byte("first"), Delay: "0s", DeduplicationID: "dedup-1"},
+		{Item: []byte(`{"foo": "bar"}`), Delay: "0s", DeduplicationID: "dedup-2"},
 	}
 	for idx, want := range expected {
 		msg, err := queue.Dequeue(queueName, "group-A", "consumer-1")
@@ -88,7 +89,7 @@ func TestFileDBQueueEnqueueBatchQueueNotFound(t *testing.T) {
 	queue := newTestQueue(t)
 	mode := "stopOnFailure"
 	batch := []internal.EnqueueMessage{
-		{Item: "no-queue", Delay: "0s", DeduplicationID: "dedup-2"},
+		{Item: []byte("no-queue"), Delay: "0s", DeduplicationID: "dedup-2"},
 	}
 	batchResult, err := queue.EnqueueBatch("missing-queue", mode, batch)
 	if err == nil {
@@ -102,24 +103,23 @@ func TestFileDBQueueEnqueueBatchQueueNotFound(t *testing.T) {
 	}
 }
 
-func TestFileDBQueueEnqueueBatchStopOnFailureMarshalError(t *testing.T) {
+func TestFileDBQueueEnqueueBatchStopOnFailureDuplicateInBatch(t *testing.T) {
 	queue := newTestQueue(t)
-	queueName := "enqueue-batch-stop-on-failure-marshal-error"
+	queueName := "enqueue-batch-stop-on-failure-duplicate-in-batch"
 	createQueueOrFail(t, queue, queueName)
 
-	invalid := make(chan int)
 	batch := []internal.EnqueueMessage{
-		{Item: "valid-message", Delay: "0s", DeduplicationID: "dedup-1"},
-		{Item: invalid, Delay: "0s", DeduplicationID: "dedup-2"},
-		{Item: "another-valid-message", Delay: "0s", DeduplicationID: "dedup-3"},
+		{Item: []byte("first-message"), Delay: "0s", DeduplicationID: "dedup-same"},
+		{Item: []byte("duplicate-message"), Delay: "0s", DeduplicationID: "dedup-same"},
+		{Item: []byte("should-not-insert"), Delay: "0s", DeduplicationID: "dedup-unique"},
 	}
 
 	result, err := queue.EnqueueBatch(queueName, "stopOnFailure", batch)
 	if err == nil {
-		t.Fatal("expected marshal error, got nil")
+		t.Fatal("expected duplicate error, got nil")
 	}
-	if !strings.Contains(err.Error(), "json: unsupported type: chan int") {
-		t.Fatalf("unexpected error: %v", err)
+	if !errors.Is(err, queue_error.ErrDuplicate) {
+		t.Fatalf("expected duplicate error, got %v", err)
 	}
 	if result.SuccessCount != 0 {
 		t.Fatalf("success count = %d, want 0", result.SuccessCount)
@@ -145,15 +145,15 @@ func TestFileDBQueueEnqueueBatchPartialSuccessChunkError(t *testing.T) {
 	items := make([]internal.EnqueueMessage, 101)
 	for i := 0; i < 100; i++ {
 		items[i] = internal.EnqueueMessage{
-			Item:            fmt.Sprintf("msg-%03d", i),
+			Item:            []byte(fmt.Sprintf("msg-%03d", i)),
 			Delay:           delay,
 			DeduplicationID: fmt.Sprintf("dedup-%03d", i),
 		}
 	}
 	items[100] = internal.EnqueueMessage{
-		Item:            make(chan int),
+		Item:            []byte("duplicate-tail"),
 		Delay:           delay,
-		DeduplicationID: "dedup-error",
+		DeduplicationID: "dedup-000",
 	}
 	result, err := queue.EnqueueBatch(queueName, "partialSuccess", items)
 	if err != nil {
@@ -165,8 +165,18 @@ func TestFileDBQueueEnqueueBatchPartialSuccessChunkError(t *testing.T) {
 	if result.FailedCount != 1 {
 		t.Fatalf("failed count = %d, want 1", result.FailedCount)
 	}
-	if len(result.FailedMessages) != 0 {
-		t.Fatalf("expected no failed message details, got %d", len(result.FailedMessages))
+	if len(result.FailedMessages) != 1 {
+		t.Fatalf("expected one failed message detail, got %d", len(result.FailedMessages))
+	}
+	failed := result.FailedMessages[0]
+	if failed.Index != 100 {
+		t.Fatalf("failed index = %d, want 100", failed.Index)
+	}
+	if string(failed.Message) != "duplicate-tail" {
+		t.Fatalf("failed message payload = %s, want duplicate-tail", string(failed.Message))
+	}
+	if !strings.Contains(failed.Reason, "duplicate") {
+		t.Fatalf("failed reason = %s, want contains duplicate", failed.Reason)
 	}
 
 	for i := 0; i < 100; i++ {
@@ -175,10 +185,7 @@ func TestFileDBQueueEnqueueBatchPartialSuccessChunkError(t *testing.T) {
 			t.Fatalf("dequeue failed at index %d: %v", i, err)
 		}
 		want := fmt.Sprintf("msg-%03d", i)
-		payload, ok := msg.Payload.(string)
-		if !ok {
-			t.Fatalf("expected payload to be string, got %T", msg.Payload)
-		}
+		payload := string(msg.Payload)
 		if payload != want {
 			t.Fatalf("payload = %s, want %s", payload, want)
 		}
@@ -198,9 +205,9 @@ func TestFileDBQueueEnqueueBatchPartialSuccessDuplicate(t *testing.T) {
 	createQueueOrFail(t, queue, queueName)
 
 	batch := []internal.EnqueueMessage{
-		{Item: "first-success", Delay: "0s", DeduplicationID: "dedup-shared"},
-		{Item: "duplicate-entry", Delay: "0s", DeduplicationID: "dedup-shared"},
-		{Item: map[string]interface{}{"payload": "second-success"}, Delay: "0s", DeduplicationID: "dedup-unique"},
+		{Item: []byte("first-success"), Delay: "0s", DeduplicationID: "dedup-shared"},
+		{Item: []byte("duplicate-entry"), Delay: "0s", DeduplicationID: "dedup-shared"},
+		{Item: []byte(`{"payload": "second-success"}`), Delay: "0s", DeduplicationID: "dedup-unique"},
 	}
 
 	result, err := queue.EnqueueBatch(queueName, "partialSuccess", batch)
@@ -221,10 +228,7 @@ func TestFileDBQueueEnqueueBatchPartialSuccessDuplicate(t *testing.T) {
 	if failed.Index != 1 {
 		t.Fatalf("failed index = %d, want 1", failed.Index)
 	}
-	msgStr, ok := failed.Message.(string)
-	if !ok {
-		t.Fatalf("failed message type = %T, want string", failed.Message)
-	}
+	msgStr := string(failed.Message)
 	if msgStr != "duplicate-entry" {
 		t.Fatalf("failed message = %s, want %s", msgStr, "duplicate-entry")
 	}
@@ -232,17 +236,17 @@ func TestFileDBQueueEnqueueBatchPartialSuccessDuplicate(t *testing.T) {
 		t.Fatalf("failed reason = %s, want contains %q", failed.Reason, "duplicate message")
 	}
 
-	expected := []interface{}{
-		"first-success",
-		map[string]interface{}{"payload": "second-success"},
+	expected := [][]byte{
+		[]byte("first-success"),
+		[]byte(`{"payload": "second-success"}`),
 	}
 	for idx, want := range expected {
 		msg, err := queue.Dequeue(queueName, "group-partial-dup", "consumer-partial-dup")
 		if err != nil {
 			t.Fatalf("dequeue failed at index %d: %v", idx, err)
 		}
-		if !reflect.DeepEqual(msg.Payload, want) {
-			t.Fatalf("payload = %#v, want %#v", msg.Payload, want)
+		if !bytes.Equal(msg.Payload, want) {
+			t.Fatalf("payload = %s, want %s", string(msg.Payload), string(want))
 		}
 		if ackErr := queue.Ack(queueName, "group-partial-dup", msg.ID, msg.Receipt); ackErr != nil {
 			t.Fatalf("ack failed at index %d: %v", idx, ackErr)
@@ -259,12 +263,12 @@ func TestFileDBQueueEnqueueDuplicateDedupID(t *testing.T) {
 	queueName := "enqueue-duplicate-dedup-id"
 	createQueueOrFail(t, queue, queueName)
 
-	first := internal.EnqueueMessage{Item: "original", Delay: "0s", DeduplicationID: "dedup-same"}
+	first := internal.EnqueueMessage{Item: []byte("original"), Delay: "0s", DeduplicationID: "dedup-same"}
 	if err := queue.Enqueue(queueName, first); err != nil {
 		t.Fatalf("enqueue returned error: %v", err)
 	}
 
-	dupErr := queue.Enqueue(queueName, internal.EnqueueMessage{Item: "duplicate", Delay: "0s", DeduplicationID: "dedup-same"})
+	dupErr := queue.Enqueue(queueName, internal.EnqueueMessage{Item: []byte("duplicate"), Delay: "0s", DeduplicationID: "dedup-same"})
 	if dupErr == nil {
 		t.Fatal("expected duplicate enqueue to return error, got nil")
 	}
@@ -276,10 +280,7 @@ func TestFileDBQueueEnqueueDuplicateDedupID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dequeue failed: %v", err)
 	}
-	payload, ok := msg.Payload.(string)
-	if !ok {
-		t.Fatalf("expected payload type string, got %T", msg.Payload)
-	}
+	payload := string(msg.Payload)
 	if payload != "original" {
 		t.Fatalf("payload = %s, want %s", payload, "original")
 	}
@@ -297,7 +298,7 @@ func TestFileDBQueueEnqueueBatchStopOnFailureDuplicate(t *testing.T) {
 	queueName := "enqueue-batch-stop-duplicate"
 	createQueueOrFail(t, queue, queueName)
 
-	seed := internal.EnqueueMessage{Item: "seed", Delay: "0s", DeduplicationID: "dedup-shared"}
+	seed := internal.EnqueueMessage{Item: []byte("seed"), Delay: "0s", DeduplicationID: "dedup-shared"}
 	if err := queue.Enqueue(queueName, seed); err != nil {
 		t.Fatalf("enqueue returned error: %v", err)
 	}
@@ -311,8 +312,8 @@ func TestFileDBQueueEnqueueBatchStopOnFailureDuplicate(t *testing.T) {
 	}
 
 	batch := []internal.EnqueueMessage{
-		{Item: "duplicate", Delay: "0s", DeduplicationID: "dedup-shared"},
-		{Item: "should-not-run", Delay: "0s", DeduplicationID: "dedup-new"},
+		{Item: []byte("duplicate"), Delay: "0s", DeduplicationID: "dedup-shared"},
+		{Item: []byte("should-not-run"), Delay: "0s", DeduplicationID: "dedup-new"},
 	}
 
 	result, err := queue.EnqueueBatch(queueName, "stopOnFailure", batch)
@@ -343,7 +344,7 @@ func TestFileDBQueueStatusAll(t *testing.T) {
 	createQueueOrFail(t, queue, emptyQueue)
 
 	err := queue.Enqueue(dataQueue, internal.EnqueueMessage{
-		Item:            map[string]interface{}{"payload": "value"},
+		Item:            []byte(`{"payload": "value"}`),
 		Delay:           "0s",
 		DeduplicationID: "status-dedup-1",
 	})

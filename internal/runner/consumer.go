@@ -29,7 +29,7 @@ func (c *Consumer) Consume(ctx context.Context) {
 
 func (c *Consumer) consume() {
 	logger := c.Client.Logger
-	err := c.Client.Consume(c.Group, c.Name, func(item interface{}) error {
+	err := c.Client.Consume(c.Group, c.Name, func(item []byte) error {
 		// Simulate message processing
 		processTime := util.GenerateNumber(1, 2)
 		time.Sleep(time.Duration(processTime) * time.Second)
@@ -37,7 +37,7 @@ func (c *Consumer) consume() {
 		if util.GenerateNumber(1, 10) > 8 {
 			return errors.New("simulated processing error")
 		}
-		logger.Info("Consumed message", slog.String("consumer", c.Name), slog.String("message", item.(string)))
+		logger.Info("Consumed message", slog.String("consumer", c.Name), slog.String("message", string(item)))
 		return nil
 	})
 	if err != nil {

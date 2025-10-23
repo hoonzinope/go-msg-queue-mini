@@ -1,7 +1,6 @@
 package core
 
 import (
-	"encoding/json"
 	"fmt"
 	"go-msg-queue-mini/internal"
 	"go-msg-queue-mini/internal/metrics"
@@ -101,10 +100,7 @@ func (q *fileDBQueue) Enqueue(queue_name string, enqMsg internal.EnqueueMessage)
 	delay := enqMsg.Delay
 	deduplicationID := enqMsg.DeduplicationID
 
-	msg, err := json.Marshal(item)
-	if err != nil {
-		return err
-	}
+	msg := item
 	gid := util.GenerateGlobalID()
 	pid := 0
 	if err := q.manager.WriteMessage(queue_name, msg, gid, pid, delay, deduplicationID); err != nil {
@@ -115,15 +111,11 @@ func (q *fileDBQueue) Enqueue(queue_name string, enqMsg internal.EnqueueMessage)
 	return nil
 }
 
-func (q *fileDBQueue) _enqueueBatchStopOnFailure(queue_name string, items []interface{}, delays []string, deduplicationIDs []string) (int64, error) {
+func (q *fileDBQueue) _enqueueBatchStopOnFailure(queue_name string, items [][]byte, delays []string, deduplicationIDs []string) (int64, error) {
 	var successCount int64 = 0
 	msgs := make([][]byte, 0, len(items))
 	for _, item := range items {
-		msg, err := json.Marshal(item)
-		if err != nil {
-			q.logger.Error("Error marshaling message", "error", err)
-			return successCount, err
-		}
+		msg := item
 		msgs = append(msgs, msg)
 	}
 	pid := 0
@@ -136,16 +128,12 @@ func (q *fileDBQueue) _enqueueBatchStopOnFailure(queue_name string, items []inte
 	return successCount, nil
 }
 
-func (q *fileDBQueue) _enqueueBatchPartialSuccess(queue_name string, items []interface{}, startIndex int64, delays []string, deduplicationIDs []string) (int64, []internal.FailedMessage, error) {
+func (q *fileDBQueue) _enqueueBatchPartialSuccess(queue_name string, items [][]byte, startIndex int64, delays []string, deduplicationIDs []string) (int64, []internal.FailedMessage, error) {
 	var successCount int64 = 0
 	var failedMessages []internal.FailedMessage
 	msgs := make([][]byte, 0, len(items))
-	for idx, item := range items {
-		msg, err := json.Marshal(item)
-		if err != nil {
-			q.logger.Error("Error marshaling message", "error", err)
-			return 0, failedMessages, fmt.Errorf("failed to marshal message at index %d: %w", idx, err)
-		}
+	for _, item := range items {
+		msg := item
 		msgs = append(msgs, msg)
 	}
 	pid := 0
@@ -166,7 +154,7 @@ func (q *fileDBQueue) _enqueueBatchPartialSuccess(queue_name string, items []int
 }
 
 func (q *fileDBQueue) EnqueueBatch(queue_name, mode string, enqMsg []internal.EnqueueMessage) (internal.BatchResult, error) {
-	items := make([]interface{}, 0, len(enqMsg))
+	items := make([][]byte, 0, len(enqMsg))
 	delays := make([]string, 0, len(enqMsg))
 	deduplicationIDs := make([]string, 0, len(enqMsg))
 	for _, em := range enqMsg {
@@ -256,16 +244,13 @@ func (q *fileDBQueue) Dequeue(queue_name, consumer_group string, consumer_id str
 		return queueMessage, queue_error.ErrEmpty
 	}
 
-	var item any
-	if err := json.Unmarshal(msg.Msg, &item); err != nil {
-		return queueMessage, err
-	}
 	// if item empty
-	if item == nil {
+	payload := msg.Msg
+	if payload == nil {
 		return queueMessage, fmt.Errorf("no message available")
 	}
 
-	queueMessage.Payload = item
+	queueMessage.Payload = payload
 	queueMessage.ID = msg.ID
 	queueMessage.Receipt = msg.Receipt
 
@@ -313,12 +298,8 @@ func (q *fileDBQueue) Peek(queue_name, group_name string, options internal.PeekO
 	}
 	var items []internal.QueueMessage
 	for _, msg := range msgs {
-		var item any
-		if err := json.Unmarshal(msg.Msg, &item); err != nil {
-			return nil, err
-		}
 		items = append(items, internal.QueueMessage{
-			Payload: item,
+			Payload: msg.Msg,
 			ID:      msg.ID,
 			Receipt: msg.Receipt,
 		})

@@ -29,7 +29,7 @@ func (qc *QueueClient) Produce(item internal.EnqueueMessage) error {
 	return nil
 }
 
-func (qc *QueueClient) Consume(groupName string, consumerID string, processFunc func(item interface{}) error) error {
+func (qc *QueueClient) Consume(groupName string, consumerID string, processFunc func(item []byte) error) error {
 	// TODO : implement Dequeue logic
 	message, err := qc.Queue.Dequeue(qc.QueueName, groupName, consumerID)
 	if err != nil {

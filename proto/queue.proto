@@ -90,7 +90,7 @@ message EnqueueRequest {
 }
 
 message EnqueueMessage {
-  string message = 1;
+  bytes message = 1;
   string delay = 2; // optional, e.g., "5s","10m"
   string deduplication_id = 3; // optional
 }
@@ -99,7 +99,7 @@ message EnqueueMessage {
 message EnqueueResponse {
   string status = 1;           // e.g., "enqueued"
   string queue_name = 2;
-  string message = 3;          // 원본 페이로드 에코백
+  bytes message = 3;          // 원본 페이로드 에코백
 }
 
 // EnqueueBatch request
@@ -121,7 +121,7 @@ message EnqueueBatchResponse {
 // FailedMessage 
 message FailedMessage {
   int64 index = 1;
-  string message = 2;
+  bytes message = 2;
   string error = 3;
 }
 
@@ -134,7 +134,7 @@ message DequeueRequest {
 
 // HTTP: DequeueMessage{ payload, receipt, id }
 message DequeueMessage {
-  string payload = 1;
+  bytes payload = 1;
   string receipt = 2;
   int64  id = 3;
 }

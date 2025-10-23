@@ -20,8 +20,9 @@ func (p *Producer) Produce(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		default:
+			message := []byte(util.GenerateItem())
 			enqueueMsg := internal.EnqueueMessage{ // Generate a new item
-				Item:  util.GenerateItem(),
+				Item:  message,
 				Delay: "0s", // Default delay
 			}
 			p.produce(enqueueMsg)

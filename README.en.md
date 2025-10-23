@@ -16,6 +16,7 @@ A compact yet robust Go-based message queue. It supports Producer/Consumer runti
 - **Batch enqueue**: Load multiple messages at once via `/enqueue/batch` and gRPC `EnqueueBatch`, supporting `stopOnFailure`/`partialSuccess` modes
 - **Deduplication**: Optional `deduplication_id` enforces per-queue idempotency within a 1-hour window
 - **Modes**: `debug` (local producers/consumers + monitor) or HTTP/gRPC server
+- **Binary-safe payloads**: Queue core and gRPC APIs store payloads as raw `[]byte`; the HTTP layer accepts arbitrary JSON and forwards the serialized bytes
 
 ## Quick Start
 
@@ -43,7 +44,7 @@ A compact yet robust Go-based message queue. It supports Producer/Consumer runti
 ├── proto/
 │   └── queue.proto              # gRPC protocol definition
 ├── internal/
-│   ├── queue.go                 # Queue interface and status types
+│   ├── queue.go                 # Queue interface (`[]byte` payloads) and status types
 │   ├── config.go                # YAML config loader
 │   ├── config_test.go           # Config loader test
 │   ├── api/http/
@@ -172,7 +173,7 @@ grpc:
 
 - Peek: `POST /api/v1/:queue_name/peek`
   - Request: `{ "group": "g1", "options": { "limit": 3, "cursor": 25, "order": "asc", "preview": true } }`
-  - Notes: `limit` defaults to 1 (max 100), `cursor` paginates by message ID, `order` accepts `asc`/`desc`, `preview` returns payload snippets up to 50 chars
+  - Notes: `limit` defaults to 1 (max 100), `cursor` paginates by message ID, `order` accepts `asc`/`desc`, `preview` returns payload snippets up to 50 runes (truncated with `...`)
   - Empty queue: `204 No Content`
 
 - Renew: `POST /api/v1/:queue_name/renew` (requires `X-API-Key`)
@@ -188,14 +189,15 @@ Common: server returns `X-Request-ID` (auto-generated if missing). Bursts may re
 - Enable with `grpc.enabled: true`, default port `50051`.
 - Health: `queue.v1.QueueService/HealthCheck` → `{ status: "ok" }`.
 - Core RPCs: `CreateQueue`, `DeleteQueue`, `Enqueue`, `EnqueueBatch`, `Dequeue`, `Ack`, `Nack`, `Peek`, `Renew`, `Status` (see `proto/queue.proto`).
-- Peek requests accept optional `options` (`limit`, `cursor`, `order`, `preview`) to fetch up to 100 messages or return payload previews.
-- Message type: gRPC `message` payloads are strings; HTTP accepts arbitrary JSON payloads.
+- Peek requests accept optional `options` (`limit`, `cursor`, `order`, `preview`) to fetch up to 100 messages or return payload previews (50 runes; truncated with `...`).
+- Message type: gRPC `message` payloads are **bytes** (JSON tools such as `grpcurl` expect Base64 strings), while the HTTP API accepts arbitrary JSON and stores the serialized bytes.
 - `Enqueue`/`EnqueueBatch` accept optional `delay` (Go duration) and `deduplication_id` (string) for scheduling or 1-hour idempotency; omit them for immediate delivery.
 - For `EnqueueBatch`, set `mode` to `stopOnFailure` or `partialSuccess`; responses include `failure_count`/`failed_messages`, and `stopOnFailure` propagates errors as 5xx responses.
 - Example (grpcurl):
   - List services: `grpcurl -plaintext localhost:50051 list`
-  - Delayed enqueue: `grpcurl -plaintext -d '{"queue_name":"default","message":"hello","delay":"45s"}' localhost:50051 queue.v1.QueueService/Enqueue`
-  - Batch enqueue with delay: `grpcurl -plaintext -d '{"queue_name":"default","messages":["hello","world"],"delay":"1m"}' localhost:50051 queue.v1.QueueService/EnqueueBatch`
+  - Delayed enqueue (note: `message` is Base64 when using JSON):  
+    `grpcurl -plaintext -d '{"queue_name":"default","message":"aGVsbG8=","delay":"45s"}' localhost:50051 queue.v1.QueueService/Enqueue`
+  - Batch enqueue: `grpcurl -plaintext -d '{"queue_name":"default","mode":"partialSuccess","messages":[{"message":"aGVsbG8="},{"message":"d29ybGQ="}]}' localhost:50051 queue.v1.QueueService/EnqueueBatch`
 
 ## gRPC Interceptors
 - Logging: `LoggerInterceptor` logs method and latency per call.

@@ -6,10 +6,12 @@ import (
 	"io"
 	"log/slog"
 	"reflect"
+	"strings"
 	"testing"
 
 	"go-msg-queue-mini/internal"
 	"go-msg-queue-mini/internal/queue_error"
+	"go-msg-queue-mini/util"
 )
 
 type enqueueBatchCall struct {
@@ -115,7 +117,10 @@ func TestQueueServiceEnqueueBatchSuccess(t *testing.T) {
 	req := &EnqueueBatchRequest{
 		QueueName: "test-queue",
 		Mode:      "stopOnFailure",
-		Messages:  []*EnqueueMessage{{Message: "first", DeduplicationId: "dedup-1"}, {Message: "second", DeduplicationId: "dedup-2"}},
+		Messages: []*EnqueueMessage{
+			{Message: []byte("first"), DeduplicationId: "dedup-1"},
+			{Message: []byte("second"), DeduplicationId: "dedup-2"},
+		},
 	}
 
 	resp, err := server.EnqueueBatch(context.Background(), req)
@@ -145,8 +150,8 @@ func TestQueueServiceEnqueueBatchSuccess(t *testing.T) {
 		t.Fatalf("mode = %s, want stopOnFailure", call.mode)
 	}
 	expectedItems := []internal.EnqueueMessage{
-		{Item: "first", DeduplicationID: "dedup-1"},
-		{Item: "second", DeduplicationID: "dedup-2"},
+		{Item: []byte("first"), DeduplicationID: "dedup-1"},
+		{Item: []byte("second"), DeduplicationID: "dedup-2"},
 	}
 	if !reflect.DeepEqual(call.items, expectedItems) {
 		t.Fatalf("enqueue items = %#v, want %#v", call.items, expectedItems)
@@ -159,7 +164,7 @@ func TestQueueServiceEnqueueBatchPartialSuccess(t *testing.T) {
 			SuccessCount: 1,
 			FailedCount:  1,
 			FailedMessages: []internal.FailedMessage{
-				{Index: 2, Message: "bad", Reason: "duplicate"},
+				{Index: 2, Message: []byte("bad"), Reason: "duplicate"},
 			},
 		},
 	}
@@ -168,7 +173,7 @@ func TestQueueServiceEnqueueBatchPartialSuccess(t *testing.T) {
 	req := &EnqueueBatchRequest{
 		QueueName: "test-queue",
 		Mode:      "partialSuccess",
-		Messages:  []*EnqueueMessage{{Message: "first", DeduplicationId: "dup-1"}, {Message: "second", DeduplicationId: "dup-2"}, {Message: "third", DeduplicationId: "dup-3"}},
+		Messages:  []*EnqueueMessage{{Message: []byte("first"), DeduplicationId: "dup-1"}, {Message: []byte("second"), DeduplicationId: "dup-2"}, {Message: []byte("third"), DeduplicationId: "dup-3"}},
 	}
 
 	resp, err := server.EnqueueBatch(context.Background(), req)
@@ -185,7 +190,7 @@ func TestQueueServiceEnqueueBatchPartialSuccess(t *testing.T) {
 	if fm.GetIndex() != 2 {
 		t.Fatalf("failed message index = %d, want 2", fm.GetIndex())
 	}
-	if fm.GetMessage() != "bad" {
+	if string(fm.GetMessage()) != "bad" {
 		t.Fatalf("failed message payload = %s, want bad", fm.GetMessage())
 	}
 	if fm.GetError() != "duplicate" {
@@ -196,9 +201,9 @@ func TestQueueServiceEnqueueBatchPartialSuccess(t *testing.T) {
 	}
 	call := mq.enqueueBatchCalls[0]
 	expectedItems := []internal.EnqueueMessage{
-		{Item: "first", DeduplicationID: "dup-1"},
-		{Item: "second", DeduplicationID: "dup-2"},
-		{Item: "third", DeduplicationID: "dup-3"},
+		{Item: []byte("first"), DeduplicationID: "dup-1"},
+		{Item: []byte("second"), DeduplicationID: "dup-2"},
+		{Item: []byte("third"), DeduplicationID: "dup-3"},
 	}
 	if !reflect.DeepEqual(call.items, expectedItems) {
 		t.Fatalf("enqueue items = %#v, want %#v", call.items, expectedItems)
@@ -209,7 +214,7 @@ func TestQueueServiceEnqueueBatchMissingQueueName(t *testing.T) {
 	mq := &mockQueue{}
 	server := newTestGRPCServer(mq)
 
-	req := &EnqueueBatchRequest{QueueName: "", Mode: "stopOnFailure", Messages: []*EnqueueMessage{{Message: "msg"}}}
+	req := &EnqueueBatchRequest{QueueName: "", Mode: "stopOnFailure", Messages: []*EnqueueMessage{{Message: []byte("msg")}}}
 
 	resp, err := server.EnqueueBatch(context.Background(), req)
 	if err == nil {
@@ -245,7 +250,7 @@ func TestQueueServiceEnqueueBatchQueueError(t *testing.T) {
 	mq := &mockQueue{enqueueBatchError: errors.New("boom")}
 	server := newTestGRPCServer(mq)
 
-	req := &EnqueueBatchRequest{QueueName: "test-queue", Mode: "stopOnFailure", Messages: []*EnqueueMessage{{Message: "msg"}}}
+	req := &EnqueueBatchRequest{QueueName: "test-queue", Mode: "stopOnFailure", Messages: []*EnqueueMessage{{Message: []byte("msg")}}}
 
 	resp, err := server.EnqueueBatch(context.Background(), req)
 	if err == nil {
@@ -333,8 +338,8 @@ func TestQueueServicePeekSuccess(t *testing.T) {
 	server := newTestGRPCServer(mq)
 	inspector := &mockQueueInspector{
 		peekMessages: []internal.QueueMessage{
-			{ID: 201, Payload: "alpha", Receipt: "ra"},
-			{ID: 202, Payload: "beta", Receipt: "rb"},
+			{ID: 201, Payload: []byte("alpha"), Receipt: "ra"},
+			{ID: 202, Payload: []byte("beta"), Receipt: "rb"},
 		},
 	}
 	server.QueueInspector = inspector
@@ -360,7 +365,7 @@ func TestQueueServicePeekSuccess(t *testing.T) {
 		t.Fatalf("message count = %d, want 2", len(resp.GetMessage()))
 	}
 	first := resp.GetMessage()[0]
-	if first.GetId() != 201 || first.GetReceipt() != "ra" || first.GetPayload() != "alpha" {
+	if first.GetId() != 201 || first.GetReceipt() != "ra" || string(first.GetPayload()) != "alpha" {
 		t.Fatalf("unexpected first message: %#v", first)
 	}
 	if len(inspector.peekCalls) != 1 {
@@ -375,6 +380,79 @@ func TestQueueServicePeekSuccess(t *testing.T) {
 	}
 	if call.options.Limit != 2 || call.options.Cursor != 10 || call.options.Order != "desc" {
 		t.Fatalf("unexpected peek options: %+v", call.options)
+	}
+}
+
+func TestQueueServicePeekPreviewVariants(t *testing.T) {
+	mq := &mockQueue{}
+	server := newTestGRPCServer(mq)
+
+	longValue := strings.Repeat("x", 80)
+
+	payloads := [][]byte{
+		[]byte("short"),
+		[]byte(longValue),
+		[]byte(`{"object":true,"nested":{"key":1}}`),
+		[]byte(`[1,2,3,{"nested":true}]`),
+	}
+
+	inspector := &mockQueueInspector{
+		peekMessages: []internal.QueueMessage{
+			{ID: 501, Payload: payloads[0], Receipt: "short"},
+			{ID: 502, Payload: payloads[1], Receipt: "long"},
+			{ID: 503, Payload: payloads[2], Receipt: "object"},
+			{ID: 504, Payload: payloads[3], Receipt: "array"},
+		},
+	}
+	server.QueueInspector = inspector
+
+	req := &PeekRequest{
+		QueueName: "preview-queue",
+		Group:     "preview-group",
+		Options: &PeekOptions{
+			Limit:   4,
+			Preview: true,
+			Order:   "asc",
+		},
+	}
+
+	resp, err := server.Peek(context.Background(), req)
+	if err != nil {
+		t.Fatalf("peek returned error: %v", err)
+	}
+	if resp.GetStatus() != "ok" {
+		t.Fatalf("response status = %s, want ok", resp.GetStatus())
+	}
+	if len(resp.GetMessage()) != 4 {
+		t.Fatalf("message count = %d, want 4", len(resp.GetMessage()))
+	}
+	if len(inspector.peekCalls) != 1 {
+		t.Fatalf("peek call count = %d, want 1", len(inspector.peekCalls))
+	}
+	call := inspector.peekCalls[0]
+	if !call.options.Preview {
+		t.Fatal("expected preview option to be true")
+	}
+
+	for idx, msg := range resp.GetMessage() {
+		if msg.GetId() != inspector.peekMessages[idx].ID {
+			t.Fatalf("message[%d] id = %d, want %d", idx, msg.GetId(), inspector.peekMessages[idx].ID)
+		}
+		if msg.GetReceipt() != inspector.peekMessages[idx].Receipt {
+			t.Fatalf("message[%d] receipt = %s, want %s", idx, msg.GetReceipt(), inspector.peekMessages[idx].Receipt)
+		}
+		expected := util.PreviewStringRuneSafe(string(payloads[idx]), peekMsgPreviewLength)
+		if string(msg.GetPayload()) != expected {
+			t.Fatalf("message[%d] payload = %q, want %q", idx, string(msg.GetPayload()), expected)
+		}
+	}
+
+	longPreview := string(resp.GetMessage()[1].GetPayload())
+	if !strings.HasSuffix(longPreview, "...") {
+		t.Fatalf("long preview = %q, want suffix ...", longPreview)
+	}
+	if runeCount := len([]rune(longPreview)); runeCount != peekMsgPreviewLength+3 {
+		t.Fatalf("long preview rune length = %d, want %d", runeCount, peekMsgPreviewLength+3)
 	}
 }
 

@@ -1,7 +1,7 @@
 package internal
 
 type QueueMessage struct {
-	Payload interface{}
+	Payload []byte
 	ID      int64
 	Receipt string
 }
@@ -14,12 +14,12 @@ type BatchResult struct {
 
 type FailedMessage struct {
 	Index   int64
-	Message interface{}
+	Message []byte
 	Reason  string
 }
 
 type EnqueueMessage struct {
-	Item            interface{}
+	Item            []byte
 	Delay           string
 	DeduplicationID string
 }
