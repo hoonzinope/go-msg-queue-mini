@@ -312,7 +312,7 @@ func (h *httpServerInstance) peekHandler(c *gin.Context) {
 		// payload preview handling
 		if peekOptions.Preview {
 			var payloadStr string = util.PreviewStringRuneSafe(string(raw), peekMsgPreviewLength)
-			raw = json.RawMessage([]byte(payloadStr))
+			raw, _ = json.Marshal(payloadStr)
 		}
 
 		dequeueMessages = append(dequeueMessages, DequeueMessage{

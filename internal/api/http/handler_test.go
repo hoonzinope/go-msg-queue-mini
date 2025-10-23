@@ -7,12 +7,14 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
 
 	"go-msg-queue-mini/internal"
 	"go-msg-queue-mini/internal/queue_error"
+	"go-msg-queue-mini/util"
 	"log/slog"
 )
 
@@ -454,6 +456,118 @@ func TestPeekHandlerSuccess(t *testing.T) {
 	}
 	if resp.Messages[0].ID != 101 || resp.Messages[0].Receipt != "r-1" || !bytes.Equal(resp.Messages[0].Payload, json.RawMessage(`"alpha"`)) {
 		t.Fatalf("unexpected first message: %#v", resp.Messages[0])
+	}
+}
+
+func TestPeekHandlerPreviewVariants(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	mq := &mockQueue{}
+
+	marshalString := func(tb testing.TB, s string) json.RawMessage {
+		tb.Helper()
+		b, err := json.Marshal(s)
+		if err != nil {
+			tb.Fatalf("failed to marshal string %q: %v", s, err)
+		}
+		return json.RawMessage(b)
+	}
+
+	longText := strings.Repeat("l", 80)
+
+	shortPayload := marshalString(t, "short")
+	longPayload := marshalString(t, longText)
+	objectPayload := json.RawMessage(`{"foo":"bar","nested":{"key":1}}`)
+	arrayPayload := json.RawMessage(`[1,2,3,{"nested":true}]`)
+
+	inspector := &mockQueueInspector{
+		peekMessages: []internal.QueueMessage{
+			{ID: 301, Payload: shortPayload, Receipt: "short-receipt"},
+			{ID: 302, Payload: longPayload, Receipt: "long-receipt"},
+			{ID: 303, Payload: objectPayload, Receipt: "object-receipt"},
+			{ID: 304, Payload: arrayPayload, Receipt: "array-receipt"},
+		},
+	}
+	server := newTestHTTPServer(mq)
+	server.QueueInspector = inspector
+
+	body := PeekRequest{
+		Group: "group-preview",
+		Options: PeekOptions{
+			Limit:   4,
+			Order:   "asc",
+			Preview: true,
+		},
+	}
+	encoded, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("failed to marshal request: %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Set("queue_name", "preview-queue")
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/preview-queue/peek", bytes.NewReader(encoded))
+	req.Header.Set("Content-Type", "application/json")
+	c.Request = req
+
+	server.peekHandler(c)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
+	}
+	if len(inspector.peekCalls) != 1 {
+		t.Fatalf("peek call count = %d, want 1", len(inspector.peekCalls))
+	}
+	call := inspector.peekCalls[0]
+	if !call.options.Preview {
+		t.Fatal("expected preview option to be true")
+	}
+	if call.options.Limit != 4 {
+		t.Fatalf("preview limit = %d, want 4", call.options.Limit)
+	}
+
+	var resp PeekResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to unmarshal peek response: %v", err)
+	}
+	if resp.Status != "ok" {
+		t.Fatalf("response status = %s, want ok", resp.Status)
+	}
+	if len(resp.Messages) != 4 {
+		t.Fatalf("message count = %d, want 4", len(resp.Messages))
+	}
+
+	originals := []json.RawMessage{shortPayload, longPayload, objectPayload, arrayPayload}
+	for i, msg := range resp.Messages {
+		if msg.ID != inspector.peekMessages[i].ID {
+			t.Fatalf("message[%d] id = %d, want %d", i, msg.ID, inspector.peekMessages[i].ID)
+		}
+		if msg.Receipt != inspector.peekMessages[i].Receipt {
+			t.Fatalf("message[%d] receipt = %s, want %s", i, msg.Receipt, inspector.peekMessages[i].Receipt)
+		}
+
+		expectedPreview := util.PreviewStringRuneSafe(string(originals[i]), peekMsgPreviewLength)
+
+		var actualPreview string
+		if err := json.Unmarshal(msg.Payload, &actualPreview); err != nil {
+			t.Fatalf("failed to unmarshal preview payload[%d]: %v", i, err)
+		}
+
+		if actualPreview != expectedPreview {
+			t.Fatalf("preview payload[%d] = %q, want %q", i, actualPreview, expectedPreview)
+		}
+	}
+
+	// ensure long payload was truncated with ellipsis
+	var longPreview string
+	if err := json.Unmarshal(resp.Messages[1].Payload, &longPreview); err != nil {
+		t.Fatalf("failed to unmarshal long preview: %v", err)
+	}
+	if !strings.HasSuffix(longPreview, "...") {
+		t.Fatalf("long preview = %q, want suffix ...", longPreview)
+	}
+	if runeCount := len([]rune(longPreview)); runeCount != peekMsgPreviewLength+3 {
+		t.Fatalf("long preview rune length = %d, want %d", runeCount, peekMsgPreviewLength+3)
 	}
 }
 

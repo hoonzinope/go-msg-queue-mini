@@ -1,11 +1,9 @@
 package util
 
 func PreviewStringRuneSafe(s string, maxRunes int) string {
-	var payloadStr string = s
-	// cut preview length with rune safety
-	runes := []rune(payloadStr)
+	runes := []rune(s)
 	if len(runes) > maxRunes {
-		payloadStr = string(runes[:maxRunes]) + "..."
+		return string(runes[:maxRunes]) + "..."
 	}
-	return payloadStr
+	return s
 }

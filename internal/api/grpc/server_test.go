@@ -6,10 +6,12 @@ import (
 	"io"
 	"log/slog"
 	"reflect"
+	"strings"
 	"testing"
 
 	"go-msg-queue-mini/internal"
 	"go-msg-queue-mini/internal/queue_error"
+	"go-msg-queue-mini/util"
 )
 
 type enqueueBatchCall struct {
@@ -378,6 +380,79 @@ func TestQueueServicePeekSuccess(t *testing.T) {
 	}
 	if call.options.Limit != 2 || call.options.Cursor != 10 || call.options.Order != "desc" {
 		t.Fatalf("unexpected peek options: %+v", call.options)
+	}
+}
+
+func TestQueueServicePeekPreviewVariants(t *testing.T) {
+	mq := &mockQueue{}
+	server := newTestGRPCServer(mq)
+
+	longValue := strings.Repeat("x", 80)
+
+	payloads := [][]byte{
+		[]byte("short"),
+		[]byte(longValue),
+		[]byte(`{"object":true,"nested":{"key":1}}`),
+		[]byte(`[1,2,3,{"nested":true}]`),
+	}
+
+	inspector := &mockQueueInspector{
+		peekMessages: []internal.QueueMessage{
+			{ID: 501, Payload: payloads[0], Receipt: "short"},
+			{ID: 502, Payload: payloads[1], Receipt: "long"},
+			{ID: 503, Payload: payloads[2], Receipt: "object"},
+			{ID: 504, Payload: payloads[3], Receipt: "array"},
+		},
+	}
+	server.QueueInspector = inspector
+
+	req := &PeekRequest{
+		QueueName: "preview-queue",
+		Group:     "preview-group",
+		Options: &PeekOptions{
+			Limit:   4,
+			Preview: true,
+			Order:   "asc",
+		},
+	}
+
+	resp, err := server.Peek(context.Background(), req)
+	if err != nil {
+		t.Fatalf("peek returned error: %v", err)
+	}
+	if resp.GetStatus() != "ok" {
+		t.Fatalf("response status = %s, want ok", resp.GetStatus())
+	}
+	if len(resp.GetMessage()) != 4 {
+		t.Fatalf("message count = %d, want 4", len(resp.GetMessage()))
+	}
+	if len(inspector.peekCalls) != 1 {
+		t.Fatalf("peek call count = %d, want 1", len(inspector.peekCalls))
+	}
+	call := inspector.peekCalls[0]
+	if !call.options.Preview {
+		t.Fatal("expected preview option to be true")
+	}
+
+	for idx, msg := range resp.GetMessage() {
+		if msg.GetId() != inspector.peekMessages[idx].ID {
+			t.Fatalf("message[%d] id = %d, want %d", idx, msg.GetId(), inspector.peekMessages[idx].ID)
+		}
+		if msg.GetReceipt() != inspector.peekMessages[idx].Receipt {
+			t.Fatalf("message[%d] receipt = %s, want %s", idx, msg.GetReceipt(), inspector.peekMessages[idx].Receipt)
+		}
+		expected := util.PreviewStringRuneSafe(string(payloads[idx]), peekMsgPreviewLength)
+		if string(msg.GetPayload()) != expected {
+			t.Fatalf("message[%d] payload = %q, want %q", idx, string(msg.GetPayload()), expected)
+		}
+	}
+
+	longPreview := string(resp.GetMessage()[1].GetPayload())
+	if !strings.HasSuffix(longPreview, "...") {
+		t.Fatalf("long preview = %q, want suffix ...", longPreview)
+	}
+	if runeCount := len([]rune(longPreview)); runeCount != peekMsgPreviewLength+3 {
+		t.Fatalf("long preview rune length = %d, want %d", runeCount, peekMsgPreviewLength+3)
 	}
 }
 
