@@ -77,16 +77,15 @@ func AuthMiddleware(apiKey string) gin.HandlerFunc {
 }
 
 // rate limit
-func RateLimitMiddleware(limiter RateLimiter, limit int) gin.HandlerFunc {
+func RateLimitMiddleware(limiter RateLimiter, limitNum int) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		clientIP := c.ClientIP()
 		limiter.lock.Lock()
 		client_limiter, exists := limiter.clients[clientIP]
 		if !exists {
-			limit := limiter.limit
 			burst := limiter.burst
 			client_limiter = &ClientLimiter{
-				limiter:  rate.NewLimiter(rate.Limit(limit), burst),
+				limiter:  rate.NewLimiter(rate.Limit(limitNum), burst),
 				lastSeen: time.Now(),
 			}
 			limiter.clients[clientIP] = client_limiter

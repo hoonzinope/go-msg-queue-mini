@@ -12,7 +12,6 @@ type QueueClient struct {
 }
 
 func NewQueue(queueName string, queue internal.Queue, logger *slog.Logger) *QueueClient {
-	// TODO : implement NewQueue logic
 	return &QueueClient{
 		QueueName: queueName,
 		Queue:     queue,
@@ -21,7 +20,6 @@ func NewQueue(queueName string, queue internal.Queue, logger *slog.Logger) *Queu
 }
 
 func (qc *QueueClient) Produce(item internal.EnqueueMessage) error {
-	// TODO : implement Enqueue logic
 	// If delay is not provided, use default value "0s"
 	if err := qc.Queue.Enqueue(qc.QueueName, item); err != nil {
 		return err
@@ -30,7 +28,6 @@ func (qc *QueueClient) Produce(item internal.EnqueueMessage) error {
 }
 
 func (qc *QueueClient) Consume(groupName string, consumerID string, processFunc func(item []byte) error) error {
-	// TODO : implement Dequeue logic
 	message, err := qc.Queue.Dequeue(qc.QueueName, groupName, consumerID)
 	if err != nil {
 		return err

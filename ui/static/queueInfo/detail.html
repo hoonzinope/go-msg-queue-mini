@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Queue Detail</title>
+
+    <link rel="stylesheet" href="/static/index.css">
+</head>
+<body>
+    <h1>Queue Detail Page</h1>
+    <div id="queue-detail">
+        <h2>Details for Queue: 
+            <span id="queue-name"></span>
+        </h2>
+    </div>
+    <div id="queue-status">
+        <h3>Queue Status</h3>
+        <div class="controls">
+            <!-- Refresh button -->
+            <button id="refresh-status">Refresh Status</button>
+        </div>
+        <table>
+            <thead>
+                <tr>
+                    <th>Total Messages</th>
+                    <th>Acked Messages</th>
+                    <th>Inflight Messages</th>
+                    <th>DLQ Messages</th>
+                </tr>
+            </thead>
+            <tbody id="queue-status-body">
+                <!-- Queue status details will be populated here by JavaScript -->
+            </tbody>
+        </table>
+    </div>
+    <div id="message-list">
+        <h3>Messages in Queue</h3>
+        <div class="filters controls">
+            <!-- Limit select -->
+            <label for="limit-select">Limit:</label>
+            <select id="limit-select">
+                <option value="10">10</option>
+                <option value="20">20</option>
+                <option value="50">50</option>
+                <option value="100">100</option>
+            </select>
+            <!-- Order select -->
+            <label for="order-select">Order:</label>
+            <select id="order-select">
+                <option value="asc">Ascending</option>
+                <option value="desc">Descending</option>
+            </select>
+            <!-- Preview toggle -->
+            <label for="preview-toggle">Preview:</label>
+            <input type="checkbox" id="preview-toggle">
+            <!-- Refresh button -->
+            <button id="refresh-messages">Refresh Messages</button>
+        </div>
+        <table>
+            <thead>
+                <tr>
+                    <th>Message ID</th>
+                    <th>Receipt</th>
+                    <th>Payload</th>
+                </tr>
+            </thead>
+            <tbody id="message-list-body">
+                <!-- Message list will be populated here by JavaScript -->
+            </tbody>
+        </table>
+        <div id="more-controls" class="controls">
+            <button id="more">Load More</button>
+        </div>
+
+    </div>
+    <script src="/static/queueInfo/detail.js"></script>
+</body>
+</html>
