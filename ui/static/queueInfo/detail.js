@@ -173,8 +173,16 @@
                 payloadCell.textContent = message.payload;
                 row.appendChild(payloadCell);
 
+                const insertedAtCell = document.createElement('td');
+                insertedAtCell.textContent = convertInsertedAt(message.inserted_at);
+                row.appendChild(insertedAtCell);
+
                 tbody.appendChild(row);
             }
         }
+    }
+
+    function convertInsertedAt(time) {
+        return time.replaceWith('T', ' ');
     }
 })();

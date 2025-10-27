@@ -290,18 +290,19 @@ func (q *fileDBQueue) Shutdown() error {
 }
 
 // bellow new api for http, gRPC
-func (q *fileDBQueue) Peek(queue_name, group_name string, options internal.PeekOptions) ([]internal.QueueMessage, error) {
+func (q *fileDBQueue) Peek(queue_name, group_name string, options internal.PeekOptions) ([]internal.PeekMessage, error) {
 	partitionID := 0
 	msgs, err := q.manager.PeekMessages(queue_name, group_name, partitionID, options)
 	if err != nil {
 		return nil, err
 	}
-	var items []internal.QueueMessage
+	var items []internal.PeekMessage
 	for _, msg := range msgs {
-		items = append(items, internal.QueueMessage{
-			Payload: msg.Msg,
-			ID:      msg.ID,
-			Receipt: msg.Receipt,
+		items = append(items, internal.PeekMessage{
+			Payload:    msg.Msg,
+			ID:         msg.ID,
+			Receipt:    msg.Receipt,
+			InsertedAt: msg.InsertTS,
 		})
 	}
 	return items, nil

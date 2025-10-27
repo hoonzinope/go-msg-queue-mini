@@ -305,7 +305,7 @@ func (h *httpServerInstance) peekHandler(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to peek message"})
 		return
 	}
-	var dequeueMessages []DequeueMessage
+	var peekMessages []PeekMessage
 	for _, msg := range messages {
 		raw := msg.Payload
 
@@ -315,16 +315,17 @@ func (h *httpServerInstance) peekHandler(c *gin.Context) {
 			raw, _ = json.Marshal(payloadStr)
 		}
 
-		dequeueMessages = append(dequeueMessages, DequeueMessage{
-			ID:      msg.ID,
-			Payload: raw,
-			Receipt: msg.Receipt,
+		peekMessages = append(peekMessages, PeekMessage{
+			ID:         msg.ID,
+			Payload:    raw,
+			Receipt:    msg.Receipt,
+			InsertedAt: msg.InsertedAt,
 		})
 	}
 
 	c.JSON(http.StatusOK, PeekResponse{
 		Status:   "ok",
-		Messages: dequeueMessages,
+		Messages: peekMessages,
 	})
 }
 

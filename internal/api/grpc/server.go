@@ -9,6 +9,7 @@ import (
 	"net"
 
 	grpc "google.golang.org/grpc"
+	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type queueServiceServer struct {
@@ -237,7 +238,7 @@ func (qs *queueServiceServer) Peek(ctx context.Context, req *PeekRequest) (res *
 		qs.Logger.Error("Error peeking message", "error", err)
 		return nil, err
 	}
-	dequeueMessages := make([]*DequeueMessage, len(messages))
+	peekMessages := make([]*PeekMessage, len(messages))
 	for i, msg := range messages {
 		// convert payload to string or json
 		payloadStr := string(msg.Payload)
@@ -246,15 +247,16 @@ func (qs *queueServiceServer) Peek(ctx context.Context, req *PeekRequest) (res *
 			payloadStr = util.PreviewStringRuneSafe(payloadStr, peekMsgPreviewLength)
 		}
 
-		dequeueMessages[i] = &DequeueMessage{
-			Id:      msg.ID,
-			Payload: []byte(payloadStr),
-			Receipt: msg.Receipt,
+		peekMessages[i] = &PeekMessage{
+			Id:         msg.ID,
+			Payload:    []byte(payloadStr),
+			Receipt:    msg.Receipt,
+			InsertedAt: timestamppb.New(msg.InsertedAt),
 		}
 	}
 	return &PeekResponse{
 		Status:  "ok",
-		Message: dequeueMessages,
+		Message: peekMessages,
 	}, nil
 }
 

@@ -1,5 +1,7 @@
 package internal
 
+import "time"
+
 type QueueStatus struct {
 	QueueType        string
 	QueueName        string
@@ -7,6 +9,13 @@ type QueueStatus struct {
 	AckedMessages    int64
 	InflightMessages int64
 	DLQMessages      int64
+}
+
+type PeekMessage struct {
+	Payload    []byte
+	ID         int64
+	Receipt    string
+	InsertedAt time.Time
 }
 
 type PeekOptions struct {
@@ -19,5 +28,5 @@ type PeekOptions struct {
 type QueueInspector interface {
 	Status(queueName string) (QueueStatus, error)
 	StatusAll() (map[string]QueueStatus, error)
-	Peek(queueName, groupName string, options PeekOptions) ([]QueueMessage, error)
+	Peek(queueName, groupName string, options PeekOptions) ([]PeekMessage, error)
 }

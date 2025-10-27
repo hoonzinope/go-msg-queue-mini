@@ -4,6 +4,7 @@ package queue.v1;
 
 option go_package = "internal/api/grpc";
 
+import "google/protobuf/timestamp.proto";
 // -----------------------------------------------------------------------------
 // Notes on error mapping (server에서 적절히 반환 권장)
 // - 큐 비어있음(core.ErrEmpty)          -> NOT_FOUND
@@ -185,7 +186,14 @@ message PeekOptions {
 // HTTP: PeekResponse{ status, message }
 message PeekResponse {
   string status = 1;           // "ok"
-  repeated DequeueMessage message = 2;
+  repeated PeekMessage message = 2;
+}
+
+message PeekMessage {
+  bytes payload = 1;
+  string receipt = 2;
+  int64  id = 3;
+  google.protobuf.Timestamp insertedAt = 4;
 }
 
 // HTTP: RenewRequest{ group, message_id, receipt, extend_sec }

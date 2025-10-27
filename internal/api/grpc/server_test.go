@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"go-msg-queue-mini/internal"
 	"go-msg-queue-mini/internal/queue_error"
@@ -61,11 +62,11 @@ func (m *mockQueue) StatusAll() (map[string]internal.QueueStatus, error) {
 	return map[string]internal.QueueStatus{}, nil
 }
 
-func (m *mockQueue) Peek(string, string, internal.PeekOptions) ([]internal.QueueMessage, error) {
-	return nil, queue_error.ErrEmpty
-}
-
 func (m *mockQueue) Shutdown() error { return nil }
+
+func (m *mockQueue) Peek(string, string, internal.PeekOptions) ([]internal.PeekMessage, error) {
+	return []internal.PeekMessage{}, nil
+}
 
 func (m *mockQueue) Renew(string, string, int64, string, int) error { return nil }
 
@@ -79,7 +80,7 @@ type mockQueueInspector struct {
 	statusError     error
 	statusAllResult map[string]internal.QueueStatus
 	statusAllError  error
-	peekMessages    []internal.QueueMessage
+	peekMessages    []internal.PeekMessage
 	peekError       error
 	peekCalls       []peekCall
 }
@@ -98,7 +99,7 @@ func (m *mockQueueInspector) StatusAll() (map[string]internal.QueueStatus, error
 	return m.statusAllResult, m.statusAllError
 }
 
-func (m *mockQueueInspector) Peek(queueName, group string, options internal.PeekOptions) ([]internal.QueueMessage, error) {
+func (m *mockQueueInspector) Peek(queueName, group string, options internal.PeekOptions) ([]internal.PeekMessage, error) {
 	m.peekCalls = append(m.peekCalls, peekCall{
 		queueName: queueName,
 		group:     group,
@@ -337,9 +338,9 @@ func TestQueueServicePeekSuccess(t *testing.T) {
 	mq := &mockQueue{}
 	server := newTestGRPCServer(mq)
 	inspector := &mockQueueInspector{
-		peekMessages: []internal.QueueMessage{
-			{ID: 201, Payload: []byte("alpha"), Receipt: "ra"},
-			{ID: 202, Payload: []byte("beta"), Receipt: "rb"},
+		peekMessages: []internal.PeekMessage{
+			{ID: 201, Payload: []byte("alpha"), Receipt: "ra", InsertedAt: time.Now()},
+			{ID: 202, Payload: []byte("beta"), Receipt: "rb", InsertedAt: time.Now()},
 		},
 	}
 	server.QueueInspector = inspector
@@ -397,11 +398,11 @@ func TestQueueServicePeekPreviewVariants(t *testing.T) {
 	}
 
 	inspector := &mockQueueInspector{
-		peekMessages: []internal.QueueMessage{
-			{ID: 501, Payload: payloads[0], Receipt: "short"},
-			{ID: 502, Payload: payloads[1], Receipt: "long"},
-			{ID: 503, Payload: payloads[2], Receipt: "object"},
-			{ID: 504, Payload: payloads[3], Receipt: "array"},
+		peekMessages: []internal.PeekMessage{
+			{ID: 501, Payload: payloads[0], Receipt: "short", InsertedAt: time.Now()},
+			{ID: 502, Payload: payloads[1], Receipt: "long", InsertedAt: time.Now()},
+			{ID: 503, Payload: payloads[2], Receipt: "object", InsertedAt: time.Now()},
+			{ID: 504, Payload: payloads[3], Receipt: "array", InsertedAt: time.Now()},
 		},
 	}
 	server.QueueInspector = inspector
