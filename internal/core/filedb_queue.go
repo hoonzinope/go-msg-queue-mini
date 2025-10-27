@@ -308,6 +308,19 @@ func (q *fileDBQueue) Peek(queue_name, group_name string, options internal.PeekO
 	return items, nil
 }
 
+func (q *fileDBQueue) Detail(queue_name string, messageId int64) (internal.PeekMessage, error) {
+	msg, err := q.manager.GetMessageDetail(queue_name, messageId)
+	if err != nil {
+		return internal.PeekMessage{}, err
+	}
+	return internal.PeekMessage{
+		Payload:    msg.Msg,
+		ID:         msg.ID,
+		Receipt:    msg.Receipt,
+		InsertedAt: msg.InsertTS,
+	}, nil
+}
+
 func (q *fileDBQueue) Renew(queue_name, group_name string, messageID int64, receipt string, extendSec int) error {
 	return q.manager.RenewMessage(queue_name, group_name, messageID, receipt, extendSec)
 }

@@ -114,3 +114,8 @@ type RenewRequest struct {
 	Receipt   string `json:"receipt" binding:"required"`
 	ExtendSec int    `json:"extend_sec" binding:"required"`
 }
+
+type DetailResponse struct {
+	Status  string      `json:"status"`
+	Message PeekMessage `json:"message"`
+}

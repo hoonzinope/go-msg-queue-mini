@@ -468,6 +468,26 @@ func (m *FileDBManager) PeekMessages(queue_name, group string, partitionID int, 
 	return result, nil
 }
 
+func (m *FileDBManager) GetMessageDetail(queue_name string, messageId int64) (queueMsg, error) {
+	queueInfoID, err := m.getQueueInfoID(queue_name)
+	if queueInfoID < 0 || err != nil {
+		return queueMsg{}, fmt.Errorf("queue not found: %s", queue_name)
+	}
+	// 트랜잭션 시작
+	result, err := m.inTxWithQueueMsg(func(tx *sql.Tx) (queueMsg, error) {
+		msg, err := m.getQueueMsgByID(tx, queueInfoID, messageId)
+		if err != nil {
+			return queueMsg{}, err
+		}
+		return msg, nil
+	})
+	if err != nil {
+		return queueMsg{}, err
+	}
+	result.QueueName = queue_name
+	return result, nil
+}
+
 func (m *FileDBManager) RenewMessage(queue_name, group string, msgID int64, receipt string, extendSec int) error {
 	if extendSec < 1 {
 		extendSec = 1

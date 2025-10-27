@@ -114,6 +114,7 @@ func router(httpServerInstance *httpServerInstance) *gin.Engine {
 	reader_no_queue_name := r.Group("/api/v1")
 	{
 		reader_no_queue_name.GET("/status/all", httpServerInstance.statusAllHandler)
+		reader_no_queue_name.GET("/queues/:queue_name/messages/:message_id", httpServerInstance.detailHandler)
 	}
 
 	reader := r.Group("/api/v1")

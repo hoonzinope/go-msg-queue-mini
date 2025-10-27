@@ -104,6 +104,10 @@ func (m *mockQueueInspector) Peek(queueName, group string, options internal.Peek
 	return m.peekMessages, nil
 }
 
+func (m *mockQueueInspector) Detail(queueName string, messageId int64) (internal.PeekMessage, error) {
+	return m.peekMessages[0], m.peekError
+}
+
 func newTestHTTPServer(queue internal.Queue) *httpServerInstance {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	return &httpServerInstance{Queue: queue, Logger: logger}

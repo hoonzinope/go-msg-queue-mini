@@ -159,15 +159,14 @@
             for (const message of messages) {
                 const row = document.createElement('tr');
 
-                const idCell = document.createElement('td');
-                idCell.textContent = message.id;
-                row.appendChild(idCell);
+                // const idCell = document.createElement('td');
+                // idCell.textContent = message.id;
+                // row.appendChild(idCell);
                 detailInfo.cursor = message.id; // Update cursor to the last message ID
-                console.log('Updated cursor to:', detailInfo.cursor);
 
-                const receiptCell = document.createElement('td');
-                receiptCell.textContent = message.receipt;
-                row.appendChild(receiptCell);
+                // const receiptCell = document.createElement('td');
+                // receiptCell.textContent = message.receipt;
+                // row.appendChild(receiptCell);
 
                 const payloadCell = document.createElement('td');
                 payloadCell.textContent = message.payload;
@@ -176,13 +175,58 @@
                 const insertedAtCell = document.createElement('td');
                 insertedAtCell.textContent = convertInsertedAt(message.inserted_at);
                 row.appendChild(insertedAtCell);
+                
+                // row click event to show message detail
+                row.addEventListener('click', () => {
+                    detailInfo.callMessageDetail(message.id, detailInfo.drawMessageDetail);
+                });
 
                 tbody.appendChild(row);
             }
+        },
+
+        callMessageDetail: function(messageId, callback) {
+            // Implement if needed
+            const url = `/api/v1/queues/${queue_name}/messages/${messageId}`;
+            fetch(url)
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('Network response was not ok ' + response.statusText);
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    callback(data);
+                })
+                .catch(error => {
+                    console.error('There was a problem with the fetch operation:', error);
+                });
+        },
+
+        drawMessageDetail: function(data) {
+            const modal = document.getElementById('message-detail-modal-container');
+            // Populate modal with message details
+            // Show modal
+            modal.classList.remove('hidden');
+            const messageContent = modal.querySelector('.message-content');
+            data.message.inserted_at = convertInsertedAt(data.message.inserted_at);
+            messageContent.textContent = JSON.stringify(data.message, null, 2);
+
+            const closeBtn = modal.querySelector('.close-button');
+            closeBtn.addEventListener('click', () => {
+                modal.classList.add('hidden');
+            });
+
+            // Close modal when clicking outside of it
+            window.addEventListener('click', (event) => {
+                if (event.target == modal) {
+                    modal.classList.add('hidden');
+                }
+            });
         }
     }
 
     function convertInsertedAt(time) {
-        return time.replaceWith('T', ' ');
+        return time.replace('T', ' ').replace('Z', '');
     }
 })();

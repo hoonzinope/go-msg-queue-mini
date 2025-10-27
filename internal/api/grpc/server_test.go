@@ -68,6 +68,10 @@ func (m *mockQueue) Peek(string, string, internal.PeekOptions) ([]internal.PeekM
 	return []internal.PeekMessage{}, nil
 }
 
+func (m *mockQueue) Detail(string, int64) (internal.PeekMessage, error) {
+	return internal.PeekMessage{}, nil
+}
+
 func (m *mockQueue) Renew(string, string, int64, string, int) error { return nil }
 
 func newTestGRPCServer(queue internal.Queue) *queueServiceServer {
@@ -109,6 +113,10 @@ func (m *mockQueueInspector) Peek(queueName, group string, options internal.Peek
 		return nil, m.peekError
 	}
 	return m.peekMessages, nil
+}
+
+func (m *mockQueueInspector) Detail(queueName string, messageId int64) (internal.PeekMessage, error) {
+	return internal.PeekMessage{}, nil
 }
 
 func TestQueueServiceEnqueueBatchSuccess(t *testing.T) {

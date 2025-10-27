@@ -29,4 +29,5 @@ type QueueInspector interface {
 	Status(queueName string) (QueueStatus, error)
 	StatusAll() (map[string]QueueStatus, error)
 	Peek(queueName, groupName string, options PeekOptions) ([]PeekMessage, error)
+	Detail(queueName string, messageId int64) (PeekMessage, error)
 }

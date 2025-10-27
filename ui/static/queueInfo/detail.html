@@ -60,8 +60,6 @@
         <table>
             <thead>
                 <tr>
-                    <th>Message ID</th>
-                    <th>Receipt</th>
                     <th>Payload</th>
                     <th>Inserted At</th>
                 </tr>
@@ -73,7 +71,14 @@
         <div id="more-controls" class="controls">
             <button id="more">Load More</button>
         </div>
-
+    </div>
+    <div class="modal hidden" id="message-detail-modal-container">
+        <!-- Modal content will be populated by JavaScript -->
+         <div id="message-detail-modal" class="modal-content">
+            <span class="close-button">&times;</span>
+            <h2>Message Detail</h2>
+            <pre id="message-detail-content" class="message-content"></pre>
+        </div>
     </div>
     <script src="/static/queueInfo/detail.js"></script>
 </body>
