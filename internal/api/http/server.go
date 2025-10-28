@@ -99,7 +99,7 @@ func router(httpServerInstance *httpServerInstance) *gin.Engine {
 	r.Use(LoggerMiddleware())
 	r.Use(ErrorHandlingMiddleware())
 	r.Use(RequestIDMiddleware())
-	r.Use(RateLimitMiddleware(httpServerInstance.limiter, 100))
+	r.Use(RateLimitMiddleware(httpServerInstance.limiter))
 
 	page := r.Group("/")
 	{
