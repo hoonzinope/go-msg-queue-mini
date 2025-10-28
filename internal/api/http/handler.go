@@ -414,16 +414,21 @@ func (h *httpServerInstance) detailHandler(c *gin.Context) {
 		return
 	}
 
+	var detailMessage PeekMessage
+	var errorMsg string = ""
 	payload, parseErr := util.ParseBytesToJsonRawMessage(message.Payload)
 	if parseErr != nil {
-		payload = json.RawMessage(`"` + util.PreviewStringRuneSafe(string(message.Payload), peekMsgPreviewLength) + `"`)
+		h.Logger.Error("Error parsing message payload - detailHandler", "error", parseErr)
+		payload = json.RawMessage(`""`)
+		errorMsg = "failed to parse message payload as JSON"
 	}
 
-	detailMessage := PeekMessage{
+	detailMessage = PeekMessage{
 		ID:         message.ID,
 		Payload:    payload,
 		Receipt:    message.Receipt,
 		InsertedAt: message.InsertedAt,
+		ErrorMsg:   errorMsg,
 	}
 	c.JSON(http.StatusOK, DetailResponse{
 		Status:  "ok",

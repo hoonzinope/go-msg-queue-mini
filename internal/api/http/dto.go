@@ -106,6 +106,7 @@ type PeekMessage struct {
 	Receipt    string          `json:"receipt"`
 	ID         int64           `json:"id"`
 	InsertedAt time.Time       `json:"inserted_at"`
+	ErrorMsg   string          `json:"error_msg,omitempty"`
 }
 
 type RenewRequest struct {
