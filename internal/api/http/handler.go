@@ -26,6 +26,14 @@ func getQueueName(c *gin.Context) (string, error) {
 	return queue_name.(string), nil
 }
 
+func getMessageID(c *gin.Context) (int64, error) {
+	messageID, ok := c.Get("message_id")
+	if !ok {
+		return 0, errors.New("message ID is required")
+	}
+	return messageID.(int64), nil
+}
+
 func (h *httpServerInstance) createQueueHandler(c *gin.Context) {
 	queue_name, queueNameErr := getQueueName(c)
 	if queueNameErr != nil {
@@ -305,39 +313,50 @@ func (h *httpServerInstance) peekHandler(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to peek message"})
 		return
 	}
-	var dequeueMessages []DequeueMessage
+	var peekMessages []PeekMessage
 	for _, msg := range messages {
 		raw := msg.Payload
+		var errorMsg string = ""
 
 		// payload preview handling
 		if peekOptions.Preview {
 			var payloadStr string = util.PreviewStringRuneSafe(string(raw), peekMsgPreviewLength)
 			raw, _ = json.Marshal(payloadStr)
+		} else {
+			var parseErr error
+			raw, parseErr = util.ParseBytesToJsonRawMessage(msg.Payload)
+			if parseErr != nil {
+				h.Logger.Error("Error parsing message payload", "error", parseErr)
+				raw = json.RawMessage(`""`)
+				errorMsg = "failed to parse message payload as JSON"
+			}
 		}
 
-		dequeueMessages = append(dequeueMessages, DequeueMessage{
-			ID:      msg.ID,
-			Payload: raw,
-			Receipt: msg.Receipt,
+		peekMessages = append(peekMessages, PeekMessage{
+			ID:         msg.ID,
+			Payload:    raw,
+			Receipt:    msg.Receipt,
+			InsertedAt: msg.InsertedAt,
+			ErrorMsg:   errorMsg,
 		})
 	}
 
 	c.JSON(http.StatusOK, PeekResponse{
 		Status:   "ok",
-		Messages: dequeueMessages,
+		Messages: peekMessages,
 	})
 }
 
 func (h *httpServerInstance) renewHandler(c *gin.Context) {
 	queue_name, queueNameErr := getQueueName(c)
 	if queueNameErr != nil {
-		h.Logger.Error("Error getting queue name", "error", queueNameErr)
+		h.Logger.Error("Error getting queue name - renewHandler", "error", queueNameErr)
 		c.JSON(http.StatusBadRequest, gin.H{"error": queueNameErr.Error()})
 		return
 	}
 	var req RenewRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		h.Logger.Error("Error binding JSON", "error", err)
+		h.Logger.Error("Error binding JSON - renewHandler", "error", err)
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request payload"})
 		return
 	}
@@ -347,7 +366,7 @@ func (h *httpServerInstance) renewHandler(c *gin.Context) {
 		if errors.Is(err, queue_error.ErrLeaseExpired) {
 			c.JSON(http.StatusConflict, gin.H{"status": "lease expired"})
 		} else {
-			h.Logger.Error("Error renewing message", "error", err)
+			h.Logger.Error("Error renewing message - renewHandler", "error", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to renew message"})
 		}
 		return
@@ -358,7 +377,7 @@ func (h *httpServerInstance) renewHandler(c *gin.Context) {
 func (h *httpServerInstance) statusAllHandler(c *gin.Context) {
 	statusMap, err := h.QueueInspector.StatusAll()
 	if err != nil {
-		h.Logger.Error("Error getting all queue status", "error", err)
+		h.Logger.Error("Error getting all queue status - statusAllHandler", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get all queue status"})
 		return
 	}
@@ -375,5 +394,54 @@ func (h *httpServerInstance) statusAllHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, StatusAllResponse{
 		Status:      "ok",
 		AllQueueMap: responseMap,
+	})
+}
+
+func (h *httpServerInstance) detailHandler(c *gin.Context) {
+	queue_name := c.Param("queue_name")
+	message_id := c.Param("message_id")
+	if queue_name == "" {
+		h.Logger.Error("Queue name is required - detailHandler")
+		c.JSON(http.StatusBadRequest, gin.H{"error": "queue name is required"})
+		return
+	}
+	if message_id == "" {
+		h.Logger.Error("Message ID is required - detailHandler")
+		c.JSON(http.StatusBadRequest, gin.H{"error": "message ID is required"})
+		return
+	}
+	message_id_num := util.ParseStringToInt64(message_id, 0)
+	if message_id_num == 0 {
+		h.Logger.Error("Invalid message ID - detailHandler", "message_id", message_id)
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid message ID"})
+		return
+	}
+
+	message, err := h.QueueInspector.Detail(queue_name, message_id_num)
+	if err != nil {
+		h.Logger.Error("Error getting message detail - detailHandler", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get message detail"})
+		return
+	}
+
+	var detailMessage PeekMessage
+	var errorMsg string = ""
+	payload, parseErr := util.ParseBytesToJsonRawMessage(message.Payload)
+	if parseErr != nil {
+		h.Logger.Error("Error parsing message payload - detailHandler", "error", parseErr)
+		payload = json.RawMessage(`""`)
+		errorMsg = "failed to parse message payload as JSON"
+	}
+
+	detailMessage = PeekMessage{
+		ID:         message.ID,
+		Payload:    payload,
+		Receipt:    message.Receipt,
+		InsertedAt: message.InsertedAt,
+		ErrorMsg:   errorMsg,
+	}
+	c.JSON(http.StatusOK, DetailResponse{
+		Status:  "ok",
+		Message: detailMessage,
 	})
 }

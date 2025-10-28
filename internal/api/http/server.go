@@ -99,10 +99,14 @@ func router(httpServerInstance *httpServerInstance) *gin.Engine {
 	r.Use(LoggerMiddleware())
 	r.Use(ErrorHandlingMiddleware())
 	r.Use(RequestIDMiddleware())
-	r.Use(RateLimitMiddleware(httpServerInstance.limiter, 1))
+	r.Use(RateLimitMiddleware(httpServerInstance.limiter))
 
-	r.StaticFS("/static", httpServerInstance.uiFS)
-	r.GET("/", httpServerInstance.uiHandler)
+	page := r.Group("/")
+	{
+		page.StaticFS("/static", httpServerInstance.uiFS)
+		page.GET("/", httpServerInstance.uiHandler)
+		page.GET("/queues/:queue_name", httpServerInstance.uiQueueDetailHandler)
+	}
 
 	r.GET("/metrics", gin.WrapH(promhttp.Handler()))
 	r.GET("/health", healthCheckHandler)
@@ -110,6 +114,7 @@ func router(httpServerInstance *httpServerInstance) *gin.Engine {
 	reader_no_queue_name := r.Group("/api/v1")
 	{
 		reader_no_queue_name.GET("/status/all", httpServerInstance.statusAllHandler)
+		reader_no_queue_name.GET("/queues/:queue_name/messages/:message_id", httpServerInstance.detailHandler)
 	}
 
 	reader := r.Group("/api/v1")

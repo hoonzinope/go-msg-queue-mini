@@ -86,7 +86,10 @@
             const row = document.createElement('tr');
 
             const nameCell = document.createElement('td');
-            nameCell.textContent = queueName;
+            const link = document.createElement('a');
+            link.href = `/queues/${encodeURIComponent(queueName)}`;
+            link.textContent = queueName;
+            nameCell.appendChild(link);
             row.appendChild(nameCell);
 
             const totalMessagesCell = document.createElement('td');

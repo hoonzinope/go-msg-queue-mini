@@ -14,8 +14,8 @@ http:
   enabled: true
   port: 8080
   rate:
-    limit: 1
-    burst: 5
+    limit: 100
+    burst: 100
   auth:
     api_key: ${API_KEY}
 

@@ -2,6 +2,7 @@ package http
 
 import (
 	"encoding/json"
+	"time"
 )
 
 type EnqueueRequest struct {
@@ -96,8 +97,16 @@ type PeekOptions struct {
 }
 
 type PeekResponse struct {
-	Status   string           `json:"status"`
-	Messages []DequeueMessage `json:"messages"`
+	Status   string        `json:"status"`
+	Messages []PeekMessage `json:"messages"`
+}
+
+type PeekMessage struct {
+	Payload    json.RawMessage `json:"payload"`
+	Receipt    string          `json:"receipt"`
+	ID         int64           `json:"id"`
+	InsertedAt time.Time       `json:"inserted_at"`
+	ErrorMsg   string          `json:"error_msg,omitempty"`
 }
 
 type RenewRequest struct {
@@ -105,4 +114,9 @@ type RenewRequest struct {
 	MessageID int64  `json:"message_id" binding:"required"`
 	Receipt   string `json:"receipt" binding:"required"`
 	ExtendSec int    `json:"extend_sec" binding:"required"`
+}
+
+type DetailResponse struct {
+	Status  string      `json:"status"`
+	Message PeekMessage `json:"message"`
 }

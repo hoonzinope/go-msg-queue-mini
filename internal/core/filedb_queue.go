@@ -290,21 +290,35 @@ func (q *fileDBQueue) Shutdown() error {
 }
 
 // bellow new api for http, gRPC
-func (q *fileDBQueue) Peek(queue_name, group_name string, options internal.PeekOptions) ([]internal.QueueMessage, error) {
+func (q *fileDBQueue) Peek(queue_name, group_name string, options internal.PeekOptions) ([]internal.PeekMessage, error) {
 	partitionID := 0
 	msgs, err := q.manager.PeekMessages(queue_name, group_name, partitionID, options)
 	if err != nil {
 		return nil, err
 	}
-	var items []internal.QueueMessage
+	var items []internal.PeekMessage
 	for _, msg := range msgs {
-		items = append(items, internal.QueueMessage{
-			Payload: msg.Msg,
-			ID:      msg.ID,
-			Receipt: msg.Receipt,
+		items = append(items, internal.PeekMessage{
+			Payload:    msg.Msg,
+			ID:         msg.ID,
+			Receipt:    msg.Receipt,
+			InsertedAt: msg.InsertTS,
 		})
 	}
 	return items, nil
+}
+
+func (q *fileDBQueue) Detail(queue_name string, messageId int64) (internal.PeekMessage, error) {
+	msg, err := q.manager.GetMessageDetail(queue_name, messageId)
+	if err != nil {
+		return internal.PeekMessage{}, err
+	}
+	return internal.PeekMessage{
+		Payload:    msg.Msg,
+		ID:         msg.ID,
+		Receipt:    msg.Receipt,
+		InsertedAt: msg.InsertTS,
+	}, nil
 }
 
 func (q *fileDBQueue) Renew(queue_name, group_name string, messageID int64, receipt string, extendSec int) error {

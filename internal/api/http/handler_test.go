@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -69,7 +70,7 @@ type mockQueueInspector struct {
 	statusAllResult map[string]internal.QueueStatus
 	statusAllError  error
 	callStatusAll   int
-	peekMessages    []internal.QueueMessage
+	peekMessages    []internal.PeekMessage
 	peekError       error
 	peekCalls       []peekCall
 	peekErrors      []error
@@ -90,7 +91,7 @@ func (m *mockQueueInspector) StatusAll() (map[string]internal.QueueStatus, error
 	return m.statusAllResult, m.statusAllError
 }
 
-func (m *mockQueueInspector) Peek(queueName, group string, options internal.PeekOptions) ([]internal.QueueMessage, error) {
+func (m *mockQueueInspector) Peek(queueName, group string, options internal.PeekOptions) ([]internal.PeekMessage, error) {
 	m.peekCalls = append(m.peekCalls, peekCall{
 		queueName: queueName,
 		group:     group,
@@ -101,6 +102,10 @@ func (m *mockQueueInspector) Peek(queueName, group string, options internal.Peek
 		return nil, m.peekError
 	}
 	return m.peekMessages, nil
+}
+
+func (m *mockQueueInspector) Detail(queueName string, messageId int64) (internal.PeekMessage, error) {
+	return m.peekMessages[0], m.peekError
 }
 
 func newTestHTTPServer(queue internal.Queue) *httpServerInstance {
@@ -396,10 +401,11 @@ func TestStatusAllHandlerError(t *testing.T) {
 func TestPeekHandlerSuccess(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	mq := &mockQueue{}
+	now := time.Now()
 	inspector := &mockQueueInspector{
-		peekMessages: []internal.QueueMessage{
-			{ID: 101, Payload: json.RawMessage(`"alpha"`), Receipt: "r-1"},
-			{ID: 102, Payload: json.RawMessage(`"beta"`), Receipt: "r-2"},
+		peekMessages: []internal.PeekMessage{
+			{ID: 101, Payload: json.RawMessage(`"alpha"`), Receipt: "r-1", InsertedAt: now},
+			{ID: 102, Payload: json.RawMessage(`"beta"`), Receipt: "r-2", InsertedAt: now.Add(1 * time.Minute)},
 		},
 	}
 	server := newTestHTTPServer(mq)
@@ -480,11 +486,11 @@ func TestPeekHandlerPreviewVariants(t *testing.T) {
 	arrayPayload := json.RawMessage(`[1,2,3,{"nested":true}]`)
 
 	inspector := &mockQueueInspector{
-		peekMessages: []internal.QueueMessage{
-			{ID: 301, Payload: shortPayload, Receipt: "short-receipt"},
-			{ID: 302, Payload: longPayload, Receipt: "long-receipt"},
-			{ID: 303, Payload: objectPayload, Receipt: "object-receipt"},
-			{ID: 304, Payload: arrayPayload, Receipt: "array-receipt"},
+		peekMessages: []internal.PeekMessage{
+			{ID: 301, Payload: shortPayload, Receipt: "short-receipt", InsertedAt: time.Now()},
+			{ID: 302, Payload: longPayload, Receipt: "long-receipt", InsertedAt: time.Now()},
+			{ID: 303, Payload: objectPayload, Receipt: "object-receipt", InsertedAt: time.Now()},
+			{ID: 304, Payload: arrayPayload, Receipt: "array-receipt", InsertedAt: time.Now()},
 		},
 	}
 	server := newTestHTTPServer(mq)

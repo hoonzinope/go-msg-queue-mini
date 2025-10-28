@@ -11,7 +11,7 @@
 - **처리 보장**: Ack/Nack, Inflight, DLQ, 재시도(backoff + jitter)
 - **지연 전송**: `delay` 파라미터로 메시지 가시 시점을 예약 (예: "10s", "5m", "1h30m")
 - **리스/갱신**: 메시지 점유 기간(lease)과 `/renew`를 통한 연장
-- **미리보기/피킹**: `/peek` 옵션으로 최대 100개 메시지 확인, 페이징/미리보기 지원
+- **미리보기/피킹**: `/peek` 옵션으로 최대 100개 메시지 확인, 페이징/미리보기 지원하며 `/messages/:message_id`로 단건 상세 조회
 - **상태 확인**: 합계/ACK/Inflight/DLQ를 반환하는 `/status`
 - **배치 Enqueue**: `/enqueue/batch` 및 gRPC `EnqueueBatch`로 여러 메시지를 일괄 적재하며 `stopOnFailure`/`partialSuccess` 모드를 지원
 - **중복 방지**: `deduplication_id`를 지정하면 동일 큐에서 1시간 동안 같은 ID가 재적재되지 않아 FIFO 기반 멱등성을 제공
@@ -174,7 +174,13 @@ grpc:
 - Peek: `POST /api/v1/:queue_name/peek`
   - 요청: `{ "group": "g1", "options": { "limit": 3, "cursor": 25, "order": "asc", "preview": true } }`
   - 설명: `limit`은 기본 1(최대 100), `cursor`로 메시지 ID 기준 페이징, `order`는 `asc`/`desc`, `preview`는 페이로드를 50자 미리보기로 반환
+  - 비고: `preview=false`일 때는 페이로드를 JSON으로 파싱해 그대로 반환하며 실패 시 빈 문자열과 `error_msg`를 함께 포함합니다.
   - 빈 큐: `204 No Content`
+
+- Detail: `GET /api/v1/:queue_name/messages/:message_id`
+  - 설명: 단일 메시지의 본문/타임스탬프를 조회합니다. `queue_name`과 `message_id`만으로 호출할 수 있으며 API 키가 필요하지 않습니다.
+  - 응답: `200 OK`, `{ "status": "ok", "message": { "id": 42, "payload": <JSON>, "receipt": "", "inserted_at": "<RFC3339>", "error_msg": "<string>" } }`
+  - 비고: 메시지가 JSON이 아니거나 파싱에 실패하면 `payload`는 빈 문자열이고 `error_msg`에 원인이 채워집니다. 존재하지 않는 ID는 현재 500 응답(`failed to get message detail`)으로 처리됩니다.
 
 - Renew: `POST /api/v1/:queue_name/renew` (헤더: `X-API-Key` 필요)
   - 요청: `{ "group": "g1", "message_id": 1, "receipt": "...", "extend_sec": 5 }`

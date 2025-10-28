@@ -460,3 +460,25 @@ func (m *FileDBManager) deleteQueueMsg(tx *sql.Tx) (int64, error) {
 	}
 	return resAffected, nil
 }
+
+// get message detail by msgID
+func (m *FileDBManager) getQueueMsgByID(
+	tx *sql.Tx, queueInfoID int64, messageId int64) (queueMsg, error) {
+	var msg queueMsg
+	err := tx.QueryRow(`
+			SELECT 
+			q.msg, q.id, "" as receipt, q.insert_ts
+			FROM queue q
+			WHERE
+			q.queue_info_id = ? 
+			AND q.id = ?
+		`, queueInfoID, messageId).Scan(
+		&msg.Msg, &msg.ID, &msg.Receipt, &msg.InsertTS)
+	if err == sql.ErrNoRows {
+		return queueMsg{}, queue_error.ErrMessageNotFound
+	}
+	if err != nil {
+		return queueMsg{}, err
+	}
+	return msg, nil
+}

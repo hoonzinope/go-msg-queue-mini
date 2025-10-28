@@ -11,7 +11,7 @@ A compact yet robust Go-based message queue. It supports Producer/Consumer runti
 - **Processing guarantees**: Ack/Nack, inflight, DLQ, retry with backoff + jitter
 - **Delayed delivery**: Schedule visibility via the optional `delay` parameter (e.g., "10s", "5m", "1h30m")
 - **Lease/Renew**: Message lease with `/renew` to extend
-- **Peek**: `/peek` accepts options to inspect up to 100 messages with paging/preview
+- **Peek/Detail**: `/peek` accepts options to inspect up to 100 messages with paging/preview, and `/messages/:message_id` returns an individual message payload
 - **Status**: `/status` returns totals for queue/acked/inflight/dlq
 - **Batch enqueue**: Load multiple messages at once via `/enqueue/batch` and gRPC `EnqueueBatch`, supporting `stopOnFailure`/`partialSuccess` modes
 - **Deduplication**: Optional `deduplication_id` enforces per-queue idempotency within a 1-hour window
@@ -174,7 +174,13 @@ grpc:
 - Peek: `POST /api/v1/:queue_name/peek`
   - Request: `{ "group": "g1", "options": { "limit": 3, "cursor": 25, "order": "asc", "preview": true } }`
   - Notes: `limit` defaults to 1 (max 100), `cursor` paginates by message ID, `order` accepts `asc`/`desc`, `preview` returns payload snippets up to 50 runes (truncated with `...`)
+  - Extra: With `preview=false` the handler attempts to parse payloads as JSON; failures yield an empty string payload plus `error_msg`.
   - Empty queue: `204 No Content`
+
+- Detail: `GET /api/v1/:queue_name/messages/:message_id`
+  - Description: Fetch a single message’s payload/timestamps by `queue_name` + `message_id`; no API key required.
+  - Response: `200 OK`, `{ "status": "ok", "message": { "id": 42, "payload": <JSON>, "receipt": "", "inserted_at": "<RFC3339>", "error_msg": "<string>" } }`
+  - Extra: Non-JSON payloads become an empty string with `error_msg` explaining the failure. Missing message IDs currently surface as a 500 response (`failed to get message detail`).
 
 - Renew: `POST /api/v1/:queue_name/renew` (requires `X-API-Key`)
   - Request: `{ "group": "g1", "message_id": 1, "receipt": "...", "extend_sec": 5 }`
