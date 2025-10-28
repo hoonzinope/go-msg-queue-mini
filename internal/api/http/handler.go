@@ -414,9 +414,14 @@ func (h *httpServerInstance) detailHandler(c *gin.Context) {
 		return
 	}
 
+	payload, parseErr := util.ParseBytesToJsonRawMessage(message.Payload)
+	if parseErr != nil {
+		payload = json.RawMessage(`"` + util.PreviewStringRuneSafe(string(message.Payload), peekMsgPreviewLength) + `"`)
+	}
+
 	detailMessage := PeekMessage{
 		ID:         message.ID,
-		Payload:    message.Payload,
+		Payload:    payload,
 		Receipt:    message.Receipt,
 		InsertedAt: message.InsertedAt,
 	}

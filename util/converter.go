@@ -1,6 +1,9 @@
 package util
 
-import "fmt"
+import (
+	"encoding/json"
+	"fmt"
+)
 
 func PreviewStringRuneSafe(s string, maxRunes int) string {
 	runes := []rune(s)
@@ -17,4 +20,13 @@ func ParseStringToInt64(s string, defaultValue int64) int64 {
 		return defaultValue
 	}
 	return result
+}
+
+func ParseBytesToJsonRawMessage(data []byte) (json.RawMessage, error) {
+	var raw json.RawMessage
+	err := json.Unmarshal(data, &raw)
+	if err != nil {
+		return nil, err
+	}
+	return raw, nil
 }
