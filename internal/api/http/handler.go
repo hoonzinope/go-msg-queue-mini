@@ -316,11 +316,20 @@ func (h *httpServerInstance) peekHandler(c *gin.Context) {
 	var peekMessages []PeekMessage
 	for _, msg := range messages {
 		raw := msg.Payload
+		var errorMsg string = ""
 
 		// payload preview handling
 		if peekOptions.Preview {
 			var payloadStr string = util.PreviewStringRuneSafe(string(raw), peekMsgPreviewLength)
 			raw, _ = json.Marshal(payloadStr)
+		} else {
+			var parseErr error
+			raw, parseErr = util.ParseBytesToJsonRawMessage(msg.Payload)
+			if parseErr != nil {
+				h.Logger.Error("Error parsing message payload", "error", parseErr)
+				raw = json.RawMessage(`""`)
+				errorMsg = "failed to parse message payload as JSON"
+			}
 		}
 
 		peekMessages = append(peekMessages, PeekMessage{
@@ -328,6 +337,7 @@ func (h *httpServerInstance) peekHandler(c *gin.Context) {
 			Payload:    raw,
 			Receipt:    msg.Receipt,
 			InsertedAt: msg.InsertedAt,
+			ErrorMsg:   errorMsg,
 		})
 	}
 
