@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"go-msg-queue-mini/internal"
+	"go-msg-queue-mini/internal/api/http/handler"
 	"go-msg-queue-mini/ui"
 	"io/fs"
 	"log/slog"
@@ -59,7 +60,7 @@ func StartServer(
 		return fmt.Errorf("failed to create sub filesystem: %w", subFSerr)
 	}
 
-	httpServerInstance := &httpServerInstance{
+	HttpServerInstance := &httpServerInstance{
 		Addr:           fmt.Sprintf(":%d", addr),
 		Queue:          queue,
 		QueueInspector: queue.(internal.QueueInspector),
@@ -70,8 +71,8 @@ func StartServer(
 	}
 
 	server := &http.Server{
-		Addr:    httpServerInstance.Addr,
-		Handler: router(httpServerInstance),
+		Addr:    HttpServerInstance.Addr,
+		Handler: router(HttpServerInstance),
 	}
 
 	go func() {
@@ -82,7 +83,7 @@ func StartServer(
 		}
 	}()
 
-	go checkExpiredClients(ctx, httpServerInstance.limiter)
+	go checkExpiredClients(ctx, HttpServerInstance.limiter)
 
 	err := server.ListenAndServe()
 	if err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -91,7 +92,7 @@ func StartServer(
 	return nil
 }
 
-func router(httpServerInstance *httpServerInstance) *gin.Engine {
+func router(HttpServerInstance *httpServerInstance) *gin.Engine {
 	r := gin.New()
 	r.RedirectTrailingSlash = false
 	r.RedirectFixedPath = false
@@ -99,13 +100,13 @@ func router(httpServerInstance *httpServerInstance) *gin.Engine {
 	r.Use(LoggerMiddleware())
 	r.Use(ErrorHandlingMiddleware())
 	r.Use(RequestIDMiddleware())
-	r.Use(RateLimitMiddleware(httpServerInstance.limiter))
+	r.Use(RateLimitMiddleware(HttpServerInstance.limiter))
 
 	page := r.Group("/")
 	{
-		page.StaticFS("/static", httpServerInstance.uiFS)
-		page.GET("/", httpServerInstance.uiHandler)
-		page.GET("/queues/:queue_name", httpServerInstance.uiQueueDetailHandler)
+		page.StaticFS("/static", HttpServerInstance.uiFS)
+		page.GET("/", HttpServerInstance.uiHandler)
+		page.GET("/queues/:queue_name", HttpServerInstance.uiQueueDetailHandler)
 	}
 
 	r.GET("/metrics", gin.WrapH(promhttp.Handler()))
@@ -113,29 +114,37 @@ func router(httpServerInstance *httpServerInstance) *gin.Engine {
 
 	reader_no_queue_name := r.Group("/api/v1")
 	{
-		reader_no_queue_name.GET("/status/all", httpServerInstance.statusAllHandler)
-		reader_no_queue_name.GET("/queues/:queue_name/messages/:message_id", httpServerInstance.detailHandler)
+		reader_no_queue_name.GET("/status/all", HttpServerInstance.statusAllHandler)
+		reader_no_queue_name.GET("/queues/:queue_name/messages/:message_id", HttpServerInstance.detailHandler)
 	}
 
 	reader := r.Group("/api/v1")
 	reader.Use(queueNameMiddleware())
 	{
-		reader.GET("/:queue_name/status", httpServerInstance.statusHandler)
-		reader.POST("/:queue_name/peek", httpServerInstance.peekHandler)
+		reader.GET("/:queue_name/status", HttpServerInstance.statusHandler)
+		reader.POST("/:queue_name/peek", HttpServerInstance.peekHandler)
+	}
+
+	dlqHandler := &handler.DLQHandler{
+		QueueInspector: HttpServerInstance.QueueInspector,
+		Logger:         HttpServerInstance.Logger,
 	}
 
 	writer := r.Group("/api/v1")
-	writer.Use(AuthMiddleware(httpServerInstance.ApiKey))
+	writer.Use(AuthMiddleware(HttpServerInstance.ApiKey))
 	writer.Use(queueNameMiddleware())
 	{
-		writer.POST("/:queue_name/create", httpServerInstance.createQueueHandler)
-		writer.DELETE("/:queue_name/delete", httpServerInstance.deleteQueueHandler)
-		writer.POST("/:queue_name/enqueue", httpServerInstance.enqueueHandler)
-		writer.POST("/:queue_name/enqueue/batch", httpServerInstance.enqueueBatchHandler)
-		writer.POST("/:queue_name/dequeue", httpServerInstance.dequeueHandler)
-		writer.POST("/:queue_name/ack", httpServerInstance.ackHandler)
-		writer.POST("/:queue_name/nack", httpServerInstance.nackHandler)
-		writer.POST("/:queue_name/renew", httpServerInstance.renewHandler)
+		writer.POST("/:queue_name/create", HttpServerInstance.createQueueHandler)
+		writer.DELETE("/:queue_name/delete", HttpServerInstance.deleteQueueHandler)
+		writer.POST("/:queue_name/enqueue", HttpServerInstance.enqueueHandler)
+		writer.POST("/:queue_name/enqueue/batch", HttpServerInstance.enqueueBatchHandler)
+		writer.POST("/:queue_name/dequeue", HttpServerInstance.dequeueHandler)
+		writer.POST("/:queue_name/ack", HttpServerInstance.ackHandler)
+		writer.POST("/:queue_name/nack", HttpServerInstance.nackHandler)
+		writer.POST("/:queue_name/renew", HttpServerInstance.renewHandler)
+
+		writer.GET("/:queue_name/dlq", dlqHandler.ListDLQMessagesHandler)
+		writer.GET("/:queue_name/dlq/:message_id", dlqHandler.DetailDLQMessageHandler)
 	}
 	return r
 }

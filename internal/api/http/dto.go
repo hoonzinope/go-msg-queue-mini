@@ -120,3 +120,17 @@ type DetailResponse struct {
 	Status  string      `json:"status"`
 	Message PeekMessage `json:"message"`
 }
+
+type DLQListRequest struct {
+	Options PeekOptions `json:"options"`
+}
+
+type DLQListResponse struct {
+	Status   string        `json:"status"`
+	Messages []PeekMessage `json:"messages"`
+}
+
+type DLQDetailResponse struct {
+	Status  string      `json:"status"`
+	Message PeekMessage `json:"message"`
+}

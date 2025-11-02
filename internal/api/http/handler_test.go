@@ -108,6 +108,14 @@ func (m *mockQueueInspector) Detail(queueName string, messageId int64) (internal
 	return m.peekMessages[0], m.peekError
 }
 
+func (m *mockQueueInspector) ListDLQ(queueName string, options internal.PeekOptions) ([]internal.DLQMessage, error) {
+	return []internal.DLQMessage{}, nil
+}
+
+func (m *mockQueueInspector) DetailDLQ(queueName string, messageId int64) (internal.DLQMessage, error) {
+	return internal.DLQMessage{}, nil
+}
+
 func newTestHTTPServer(queue internal.Queue) *httpServerInstance {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	return &httpServerInstance{Queue: queue, Logger: logger}

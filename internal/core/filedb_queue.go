@@ -368,3 +368,36 @@ func (q *fileDBQueue) StatusAll() (map[string]internal.QueueStatus, error) {
 	}
 	return statusMap, nil
 }
+
+func (q *fileDBQueue) ListDLQ(queue_name string, options internal.PeekOptions) ([]internal.DLQMessage, error) {
+	msgs, err := q.manager.ListDLQMessages(queue_name, options)
+	if err != nil {
+		return nil, err
+	}
+	var items []internal.DLQMessage
+	for _, msg := range msgs {
+		items = append(items, internal.DLQMessage{
+			ID:          msg.ID,
+			Payload:     msg.Msg,
+			Reason:      msg.Reason,
+			FailedGroup: msg.FailedGroup,
+			InsertedAt:  msg.InsertTs,
+		})
+	}
+	return items, nil
+}
+
+func (q *fileDBQueue) DetailDLQ(queue_name string, messageId int64) (internal.DLQMessage, error) {
+	msg, err := q.manager.GetDLQMessageDetail(queue_name, messageId)
+	if err != nil {
+		return internal.DLQMessage{}, err
+	}
+	dlqMsg := internal.DLQMessage{
+		ID:          msg.ID,
+		Payload:     msg.Msg,
+		Reason:      msg.Reason,
+		FailedGroup: msg.FailedGroup,
+		InsertedAt:  msg.InsertTs,
+	}
+	return dlqMsg, nil
+}
