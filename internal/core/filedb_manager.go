@@ -510,6 +510,48 @@ func (m *FileDBManager) RenewMessage(queue_name, group string, msgID int64, rece
 	})
 }
 
+func (m *FileDBManager) ListDLQMessages(queue_name string, options internal.PeekOptions) ([]DLQMessage, error) {
+	queueInfoID, err := m.getQueueInfoID(queue_name)
+	if queueInfoID < 0 || err != nil {
+		return nil, fmt.Errorf("queue not found: %s", queue_name)
+	}
+	// 트랜잭션 시작
+	var result []DLQMessage
+	err = m.inTx(func(tx *sql.Tx) error {
+		msgs, err := m.ListDLQ(tx, queueInfoID, options)
+		if err != nil {
+			return err
+		}
+		result = append(result, msgs...)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func (m *FileDBManager) GetDLQMessageDetail(queue_name string, messageId int64) (DLQMessage, error) {
+	queueInfoID, err := m.getQueueInfoID(queue_name)
+	if queueInfoID < 0 || err != nil {
+		return DLQMessage{}, fmt.Errorf("queue not found: %s", queue_name)
+	}
+	// 트랜잭션 시작
+	var dlqMsg DLQMessage
+	txErr := m.inTx(func(tx *sql.Tx) error {
+		msg, queryErr := m.DetailDLQ(tx, queueInfoID, messageId)
+		if queryErr != nil {
+			return queryErr
+		}
+		dlqMsg = msg
+		return nil
+	})
+	if txErr != nil {
+		return DLQMessage{}, txErr
+	}
+	return dlqMsg, nil
+}
+
 func (m *FileDBManager) inTx(txFunc func(tx *sql.Tx) error) error {
 	tx, err := m.db.Begin()
 	if err != nil {

@@ -74,6 +74,14 @@ func (m *mockQueue) Detail(string, int64) (internal.PeekMessage, error) {
 
 func (m *mockQueue) Renew(string, string, int64, string, int) error { return nil }
 
+func (m *mockQueue) ListDLQ(string, internal.PeekOptions) ([]internal.DLQMessage, error) {
+	return []internal.DLQMessage{}, nil
+}
+
+func (m *mockQueue) DetailDLQ(string, int64) (internal.DLQMessage, error) {
+	return internal.DLQMessage{}, nil
+}
+
 func newTestGRPCServer(queue internal.Queue) *queueServiceServer {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	return NewQueueServiceServer(queue, logger)
@@ -117,6 +125,14 @@ func (m *mockQueueInspector) Peek(queueName, group string, options internal.Peek
 
 func (m *mockQueueInspector) Detail(queueName string, messageId int64) (internal.PeekMessage, error) {
 	return internal.PeekMessage{}, nil
+}
+
+func (m *mockQueueInspector) ListDLQ(queueName string, options internal.PeekOptions) ([]internal.DLQMessage, error) {
+	return []internal.DLQMessage{}, nil
+}
+
+func (m *mockQueueInspector) DetailDLQ(queueName string, messageId int64) (internal.DLQMessage, error) {
+	return internal.DLQMessage{}, nil
 }
 
 func TestQueueServiceEnqueueBatchSuccess(t *testing.T) {
