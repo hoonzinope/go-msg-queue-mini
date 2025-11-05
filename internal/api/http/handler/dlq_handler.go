@@ -110,9 +110,10 @@ func ParseQueryOptions(c *gin.Context) internal.PeekOptions {
 	if limitParam := c.Query("limit"); limitParam != "" {
 		limit, err := strconv.Atoi(limitParam)
 		if err == nil && limit > 0 {
+			if limit > MAX_DLQ_PEEK_LIMIT {
+				limit = MAX_DLQ_PEEK_LIMIT
+			}
 			options.Limit = limit
-		} else if limit > MAX_DLQ_PEEK_LIMIT {
-			options.Limit = MAX_DLQ_PEEK_LIMIT
 		}
 	}
 
