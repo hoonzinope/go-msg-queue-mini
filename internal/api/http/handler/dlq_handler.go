@@ -1,28 +1,16 @@
 package handler
 
 import (
-	"fmt"
 	"go-msg-queue-mini/internal"
 	"log/slog"
 	"net/http"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 )
 
-type DLQHandler struct {
-	QueueInspector internal.QueueInspector
-	Logger         *slog.Logger
-}
-
-type PeekOptions struct {
-	Limit   int    `json:"limit"`   // number of messages to peek
-	Cursor  int64  `json:"cursor"`  // for pagination
-	Order   string `json:"order"`   // "asc" or "desc"
-	Preview bool   `json:"preview"` // whether to return full message or just metadata
-}
-
 type DLQListRequest struct {
-	Options PeekOptions `json:"options"`
+	Options internal.PeekOptions `json:"options"`
 }
 
 type DLQListResponse struct {
@@ -43,12 +31,19 @@ type DLQMessage struct {
 	InsertedAt  string
 }
 
+type DLQHandler struct {
+	QueueInspector internal.QueueInspector
+	Logger         *slog.Logger
+}
+
 var defaultDLQPeekOptions = internal.PeekOptions{
-	Limit:   100,
+	Limit:   10,
 	Cursor:  0,
 	Order:   "asc",
 	Preview: false,
 }
+
+var MAX_DLQ_PEEK_LIMIT = 100
 
 func (dlqHandler *DLQHandler) ListDLQMessagesHandler(c *gin.Context) {
 	queueName := c.Param("queue_name")
@@ -72,8 +67,7 @@ func (dlqHandler *DLQHandler) DetailDLQMessageHandler(c *gin.Context) {
 	queueName := c.Param("queue_name")
 	messageIDParam := c.Param("message_id")
 
-	var messageID int64
-	_, err := fmt.Sscan(messageIDParam, &messageID)
+	messageID, err := strconv.ParseInt(messageIDParam, 10, 64)
 	if err != nil {
 		dlqHandler.Logger.Error("Error parsing message ID", "error", err)
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid message ID"})
@@ -113,32 +107,30 @@ func convertDLQMessage(internalMessage internal.DLQMessage) DLQMessage {
 func ParseQueryOptions(c *gin.Context) internal.PeekOptions {
 	options := defaultDLQPeekOptions
 
-	limitParam := c.Query("limit")
-	if limitParam != "" {
-		var limit int
-		_, err := fmt.Sscan(limitParam, &limit)
+	if limitParam := c.Query("limit"); limitParam != "" {
+		limit, err := strconv.Atoi(limitParam)
 		if err == nil && limit > 0 {
 			options.Limit = limit
+		} else if limit > MAX_DLQ_PEEK_LIMIT {
+			options.Limit = MAX_DLQ_PEEK_LIMIT
 		}
 	}
 
-	cursorParam := c.Query("cursor")
-	if cursorParam != "" {
-		var cursor int64
-		_, err := fmt.Sscan(cursorParam, &cursor)
+	if cursorParam := c.Query("cursor"); cursorParam != "" {
+		cursor, err := strconv.ParseInt(cursorParam, 10, 64)
 		if err == nil && cursor >= 0 {
 			options.Cursor = cursor
 		}
 	}
 
-	orderParam := c.Query("order")
-	if orderParam == "asc" || orderParam == "desc" {
+	if orderParam := c.Query("order"); orderParam == "asc" || orderParam == "desc" {
 		options.Order = orderParam
 	}
 
-	previewParam := c.Query("preview")
-	if previewParam == "true" {
-		options.Preview = true
+	if previewParam := c.Query("preview"); previewParam != "" {
+		if preview, err := strconv.ParseBool(previewParam); err == nil && preview {
+			options.Preview = true
+		}
 	}
 
 	return options

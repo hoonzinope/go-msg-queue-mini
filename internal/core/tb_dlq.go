@@ -74,12 +74,10 @@ func (m *FileDBManager) ListDLQ(tx *sql.Tx, queueInfoID int64, options internal.
 	}
 	query += " ORDER BY id " + orderDirection + " "
 
-	// limit
+	// limit - default limit is 10
 	if options.Limit > 0 {
 		query += " LIMIT ? "
 		args = append(args, options.Limit)
-	} else {
-		query += " LIMIT 10 " // default limit
 	}
 
 	rows, err := tx.Query(query, args...)

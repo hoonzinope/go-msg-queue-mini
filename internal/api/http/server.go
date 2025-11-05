@@ -60,7 +60,7 @@ func StartServer(
 		return fmt.Errorf("failed to create sub filesystem: %w", subFSerr)
 	}
 
-	HttpServerInstance := &httpServerInstance{
+	httpServerInstance := &httpServerInstance{
 		Addr:           fmt.Sprintf(":%d", addr),
 		Queue:          queue,
 		QueueInspector: queue.(internal.QueueInspector),
@@ -71,8 +71,8 @@ func StartServer(
 	}
 
 	server := &http.Server{
-		Addr:    HttpServerInstance.Addr,
-		Handler: router(HttpServerInstance),
+		Addr:    httpServerInstance.Addr,
+		Handler: router(httpServerInstance),
 	}
 
 	go func() {
@@ -83,7 +83,7 @@ func StartServer(
 		}
 	}()
 
-	go checkExpiredClients(ctx, HttpServerInstance.limiter)
+	go checkExpiredClients(ctx, httpServerInstance.limiter)
 
 	err := server.ListenAndServe()
 	if err != nil && !errors.Is(err, http.ErrServerClosed) {
