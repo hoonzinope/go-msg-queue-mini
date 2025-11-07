@@ -33,7 +33,7 @@ func (consumerHandler *ConsumerHandler) DequeueHandler(c *gin.Context) {
 	message, err := consumerHandler.Queue.Dequeue(queue_name, req.Group, req.ConsumerID)
 	if err != nil {
 		if errors.Is(err, queue_error.ErrEmpty) {
-			c.JSON(http.StatusNoContent, gin.H{"status": "queue is empty"})
+			c.AbortWithStatus(http.StatusNoContent)
 		} else if errors.Is(err, queue_error.ErrContended) {
 			consumerHandler.Logger.Error("Error dequeuing message", "error", err)
 			c.JSON(http.StatusConflict, gin.H{"status": "message is being processed"})

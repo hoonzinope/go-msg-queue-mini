@@ -87,7 +87,7 @@ func (ih *InspectHandler) PeekHandler(c *gin.Context) {
 	messages, err := ih.QueueInspector.Peek(queue_name, req.Group, peekOptions)
 	if err != nil {
 		if errors.Is(err, queue_error.ErrEmpty) || errors.Is(err, queue_error.ErrNoMessage) {
-			c.JSON(http.StatusNoContent, gin.H{"status": "queue is empty"})
+			c.AbortWithStatus(http.StatusNoContent)
 			return
 		}
 		ih.Logger.Error("Error peeking message", "error", err)

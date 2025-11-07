@@ -19,9 +19,9 @@ type DLQDetailResponse struct {
 }
 
 type DLQMessage struct {
-	Payload     []byte
-	ID          int64
-	Reason      string
-	FailedGroup string
-	InsertedAt  string
+	Payload     []byte `json:"payload"`
+	ID          int64  `json:"id"`
+	Reason      string `json:"reason"`
+	FailedGroup string `json:"failed_group"`
+	InsertedAt  string `json:"inserted_at"`
 }
