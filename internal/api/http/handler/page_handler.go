@@ -1,4 +1,4 @@
-package http
+package handler
 
 import (
 	"net/http"
@@ -7,9 +7,13 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func (h *httpServerInstance) uiHandler(c *gin.Context) {
+type PageHandler struct {
+	UIFS http.FileSystem
+}
+
+func (h *PageHandler) UiHandler(c *gin.Context) {
 	indexpage := "index.html"
-	f, err := h.uiFS.Open(indexpage) // h.uiFS = http.FS(sub) with sub = fs.Sub(embedded, "static")
+	f, err := h.UIFS.Open(indexpage) // h.UIFS = http.FS(sub) with sub = fs.Sub(embedded, "static")
 	if err != nil {
 		c.String(http.StatusInternalServerError, "internal server error")
 		return
@@ -19,9 +23,9 @@ func (h *httpServerInstance) uiHandler(c *gin.Context) {
 	http.ServeContent(c.Writer, c.Request, indexpage, time.Time{}, f)
 }
 
-func (h *httpServerInstance) uiQueueDetailHandler(c *gin.Context) {
+func (h *PageHandler) UiQueueDetailHandler(c *gin.Context) {
 	detailPage := "queueInfo/detail.html"
-	f, err := h.uiFS.Open(detailPage) // h.uiFS = http.FS(sub) with sub = fs.Sub(embedded, "static")
+	f, err := h.UIFS.Open(detailPage) // h.UIFS = http.FS(sub) with sub = fs.Sub(embedded, "static")
 	if err != nil {
 		c.String(http.StatusInternalServerError, "internal server error")
 		return

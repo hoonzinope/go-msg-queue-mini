@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"go-msg-queue-mini/internal"
+	"go-msg-queue-mini/internal/api/http/dto"
 	"log/slog"
 
 	"github.com/gin-gonic/gin"
@@ -135,7 +136,7 @@ func TestListDLQMessagesHandlerUsesQueryOptions(t *testing.T) {
 		t.Fatalf("options mismatch: %+v", call.options)
 	}
 
-	var resp DLQListResponse
+	var resp dto.DLQListResponse
 	if err := json.Unmarshal(recorder.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("unmarshal response: %v", err)
 	}
@@ -195,7 +196,7 @@ func TestDetailDLQMessageHandlerSuccess(t *testing.T) {
 		t.Fatalf("detail call mismatch: queue=%s id=%d", mock.detailQueue, mock.detailID)
 	}
 
-	var resp DLQDetailResponse
+	var resp dto.DLQDetailResponse
 	if err := json.Unmarshal(recorder.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("unmarshal response: %v", err)
 	}

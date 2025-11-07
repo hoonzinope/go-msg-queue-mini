@@ -2,34 +2,13 @@ package handler
 
 import (
 	"go-msg-queue-mini/internal"
+	"go-msg-queue-mini/internal/api/http/dto"
 	"log/slog"
 	"net/http"
 	"strconv"
 
 	"github.com/gin-gonic/gin"
 )
-
-type DLQListRequest struct {
-	Options internal.PeekOptions `json:"options"`
-}
-
-type DLQListResponse struct {
-	Status   string       `json:"status"`
-	Messages []DLQMessage `json:"messages"`
-}
-
-type DLQDetailResponse struct {
-	Status  string     `json:"status"`
-	Message DLQMessage `json:"message"`
-}
-
-type DLQMessage struct {
-	Payload     []byte
-	ID          int64
-	Reason      string
-	FailedGroup string
-	InsertedAt  string
-}
 
 type DLQHandler struct {
 	QueueInspector internal.QueueInspector
@@ -43,8 +22,6 @@ var defaultDLQPeekOptions = internal.PeekOptions{
 	Preview: false,
 }
 
-var MAX_DLQ_PEEK_LIMIT = 100
-
 func (dlqHandler *DLQHandler) ListDLQMessagesHandler(c *gin.Context) {
 	queueName := c.Param("queue_name")
 
@@ -57,7 +34,7 @@ func (dlqHandler *DLQHandler) ListDLQMessagesHandler(c *gin.Context) {
 		return
 	}
 
-	c.JSON(200, DLQListResponse{
+	c.JSON(200, dto.DLQListResponse{
 		Status:   "ok",
 		Messages: convertDLQMessages(messages),
 	})
@@ -80,22 +57,22 @@ func (dlqHandler *DLQHandler) DetailDLQMessageHandler(c *gin.Context) {
 		return
 	}
 
-	c.JSON(200, DLQDetailResponse{
+	c.JSON(200, dto.DLQDetailResponse{
 		Status:  "ok",
 		Message: convertDLQMessage(message),
 	})
 }
 
-func convertDLQMessages(internalMessages []internal.DLQMessage) []DLQMessage {
-	dlqMessages := make([]DLQMessage, len(internalMessages))
+func convertDLQMessages(internalMessages []internal.DLQMessage) []dto.DLQMessage {
+	dlqMessages := make([]dto.DLQMessage, len(internalMessages))
 	for i, msg := range internalMessages {
 		dlqMessages[i] = convertDLQMessage(msg)
 	}
 	return dlqMessages
 }
 
-func convertDLQMessage(internalMessage internal.DLQMessage) DLQMessage {
-	return DLQMessage{
+func convertDLQMessage(internalMessage internal.DLQMessage) dto.DLQMessage {
+	return dto.DLQMessage{
 		Payload:     internalMessage.Payload,
 		ID:          internalMessage.ID,
 		Reason:      internalMessage.Reason,
@@ -110,8 +87,8 @@ func ParseQueryOptions(c *gin.Context) internal.PeekOptions {
 	if limitParam := c.Query("limit"); limitParam != "" {
 		limit, err := strconv.Atoi(limitParam)
 		if err == nil && limit > 0 {
-			if limit > MAX_DLQ_PEEK_LIMIT {
-				limit = MAX_DLQ_PEEK_LIMIT
+			if limit > dto.MAX_DLQ_PEEK_LIMIT {
+				limit = dto.MAX_DLQ_PEEK_LIMIT
 			}
 			options.Limit = limit
 		}
