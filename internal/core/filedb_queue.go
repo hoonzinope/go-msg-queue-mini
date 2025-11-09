@@ -401,3 +401,13 @@ func (q *fileDBQueue) DetailDLQ(queue_name string, messageId int64) (internal.DL
 	}
 	return dlqMsg, nil
 }
+
+// implements DLQManager interface
+func (q *fileDBQueue) RedriveDLQMessages(queue_name string, messageIDs []int64) error {
+	redriveErr := q.manager.RedriveDLQMessages(queue_name, messageIDs)
+	if redriveErr != nil {
+		q.logger.Error("Error redriving DLQ messages", "error", redriveErr)
+		return redriveErr
+	}
+	return nil
+}

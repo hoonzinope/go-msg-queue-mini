@@ -392,3 +392,46 @@ func TestFileDBQueueStatusAll(t *testing.T) {
 		t.Fatalf("empty queue type = %s, want memory", emptyStatus.QueueType)
 	}
 }
+
+func TestFileDBQueueRedriveDLQMessages(t *testing.T) {
+	queue := newTestQueue(t)
+	queueName := "queue-redrive"
+	createQueueOrFail(t, queue, queueName)
+
+	payload := []byte("redrive-through-queue")
+	if err := queue.Enqueue(queueName, internal.EnqueueMessage{Item: payload}); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+
+	_, _, dlqID := seedSingleDLQMessage(t, queue, queueName)
+
+	if err := queue.RedriveDLQMessages(queueName, []int64{dlqID}); err != nil {
+		t.Fatalf("RedriveDLQMessages: %v", err)
+	}
+
+	msg, err := queue.Dequeue(queueName, "redrive-group", "consumer-1")
+	if err != nil {
+		t.Fatalf("dequeue after redrive: %v", err)
+	}
+	if !bytes.Equal(msg.Payload, payload) {
+		t.Fatalf("payload = %s, want %s", string(msg.Payload), string(payload))
+	}
+	if err := queue.Ack(queueName, "redrive-group", msg.ID, msg.Receipt); err != nil {
+		t.Fatalf("ack redriven message: %v", err)
+	}
+
+	dlqMsgs, err := queue.manager.ListDLQMessages(queueName, internal.PeekOptions{Limit: 10})
+	if err != nil {
+		t.Fatalf("ListDLQMessages: %v", err)
+	}
+	if len(dlqMsgs) != 0 {
+		t.Fatalf("dlq length = %d, want 0", len(dlqMsgs))
+	}
+}
+
+func TestFileDBQueueRedriveDLQMessagesQueueNotFound(t *testing.T) {
+	queue := newTestQueue(t)
+	if err := queue.RedriveDLQMessages("missing-queue", []int64{1}); err == nil {
+		t.Fatal("expected error when queue does not exist")
+	}
+}

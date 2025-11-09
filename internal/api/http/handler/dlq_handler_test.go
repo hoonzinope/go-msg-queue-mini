@@ -2,9 +2,11 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -61,6 +63,21 @@ func (f *fakeDLQInspector) DetailDLQ(queueName string, messageID int64) (interna
 		return internal.DLQMessage{}, f.detailErr
 	}
 	return f.detailResponse, nil
+}
+
+type redriveCall struct {
+	queueName  string
+	messageIDs []int64
+}
+
+type fakeDLQManager struct {
+	calls []redriveCall
+	err   error
+}
+
+func (f *fakeDLQManager) RedriveDLQMessages(queueName string, messageIDs []int64) error {
+	f.calls = append(f.calls, redriveCall{queueName: queueName, messageIDs: append([]int64(nil), messageIDs...)})
+	return f.err
 }
 
 func TestParseQueryOptionsDefaults(t *testing.T) {
@@ -212,5 +229,100 @@ func TestDetailDLQMessageHandlerSuccess(t *testing.T) {
 	}
 	if string(resp.Message.Payload) != "world" {
 		t.Fatalf("payload = %s, want world", string(resp.Message.Payload))
+	}
+}
+
+func TestRedriveDLQMessagesHandlerSuccess(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+
+	body := `{"message_ids":[1,2,3]}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/demo/dlq/redrive", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	ctx.Request = req
+	ctx.Params = gin.Params{{Key: "queue_name", Value: "demo"}}
+
+	manager := &fakeDLQManager{}
+	handler := &DLQHandler{
+		DLQManager: manager,
+		Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	handler.RedriveDLQMessagesHandler(ctx)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+	if len(manager.calls) != 1 {
+		t.Fatalf("redrive calls = %d, want 1", len(manager.calls))
+	}
+	call := manager.calls[0]
+	if call.queueName != "demo" {
+		t.Fatalf("queue name = %s, want demo", call.queueName)
+	}
+	if len(call.messageIDs) != 3 || call.messageIDs[0] != 1 || call.messageIDs[1] != 2 || call.messageIDs[2] != 3 {
+		t.Fatalf("message ids = %+v, want [1 2 3]", call.messageIDs)
+	}
+	var resp map[string]string
+	if err := json.Unmarshal(recorder.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if resp["status"] != "ok" {
+		t.Fatalf("response status = %s, want ok", resp["status"])
+	}
+}
+
+func TestRedriveDLQMessagesHandlerInvalidBody(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+
+	body := `{"message_ids":"not-array"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/demo/dlq/redrive", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	ctx.Request = req
+	ctx.Params = gin.Params{{Key: "queue_name", Value: "demo"}}
+
+	manager := &fakeDLQManager{}
+	handler := &DLQHandler{
+		DLQManager: manager,
+		Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	handler.RedriveDLQMessagesHandler(ctx)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusBadRequest)
+	}
+	if len(manager.calls) != 0 {
+		t.Fatalf("redrive should not be called on invalid body")
+	}
+}
+
+func TestRedriveDLQMessagesHandlerManagerError(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+
+	body := `{"message_ids":[9]}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/demo/dlq/redrive", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	ctx.Request = req
+	ctx.Params = gin.Params{{Key: "queue_name", Value: "demo"}}
+
+	manager := &fakeDLQManager{err: errors.New("redrive failed")}
+	handler := &DLQHandler{
+		DLQManager: manager,
+		Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	handler.RedriveDLQMessagesHandler(ctx)
+
+	if len(manager.calls) != 1 {
+		t.Fatalf("redrive calls = %d, want 1", len(manager.calls))
+	}
+	if len(ctx.Errors) != 1 || ctx.Errors[0].Err != manager.err {
+		t.Fatalf("expected context error %v, got %+v", manager.err, ctx.Errors)
 	}
 }

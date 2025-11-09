@@ -31,6 +31,7 @@ type httpServerInstance struct {
 	Addr           string
 	Queue          internal.Queue
 	QueueInspector internal.QueueInspector
+	DLQManager     internal.DLQManager
 	ApiKey         string
 	limiter        RateLimiter
 	Logger         *slog.Logger
@@ -61,6 +62,7 @@ func StartServer(
 		Addr:           fmt.Sprintf(":%d", addr),
 		Queue:          queue,
 		QueueInspector: queue.(internal.QueueInspector),
+		DLQManager:     queue.(internal.DLQManager),
 		ApiKey:         config.HTTP.Auth.APIKey,
 		limiter:        rateLimiter,
 		Logger:         logger,
