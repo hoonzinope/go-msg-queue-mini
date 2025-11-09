@@ -75,7 +75,7 @@ type fakeDLQManager struct {
 	err   error
 }
 
-func (f *fakeDLQManager) RedriveDLQMessages(queueName string, messageIDs []int64) error {
+func (f *fakeDLQManager) RedriveDLQ(queueName string, messageIDs []int64) error {
 	f.calls = append(f.calls, redriveCall{queueName: queueName, messageIDs: append([]int64(nil), messageIDs...)})
 	return f.err
 }

@@ -74,7 +74,7 @@ func (dlqHandler *DLQHandler) RedriveDLQMessagesHandler(c *gin.Context) {
 		return
 	}
 
-	err := dlqHandler.DLQManager.RedriveDLQMessages(queueName, req.MessageIDs)
+	err := dlqHandler.DLQManager.RedriveDLQ(queueName, req.MessageIDs)
 	if err != nil {
 		c.Error(err)
 		return
