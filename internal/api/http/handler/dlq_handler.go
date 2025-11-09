@@ -12,6 +12,7 @@ import (
 
 type DLQHandler struct {
 	QueueInspector internal.QueueInspector
+	DLQManager     internal.DLQManager
 	Logger         *slog.Logger
 }
 
@@ -61,6 +62,25 @@ func (dlqHandler *DLQHandler) DetailDLQMessageHandler(c *gin.Context) {
 		Status:  "ok",
 		Message: convertDLQMessage(message),
 	})
+}
+
+func (dlqHandler *DLQHandler) RedriveDLQMessagesHandler(c *gin.Context) {
+	queueName := c.Param("queue_name")
+
+	var req dto.DLQRedriveRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		dlqHandler.Logger.Error("Error binding JSON", "error", err)
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+
+	err := dlqHandler.DLQManager.RedriveDLQ(queueName, req.MessageIDs)
+	if err != nil {
+		c.Error(err)
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 
 func convertDLQMessages(internalMessages []internal.DLQMessage) []dto.DLQMessage {

@@ -552,6 +552,39 @@ func (m *FileDBManager) GetDLQMessageDetail(queue_name string, messageId int64) 
 	return dlqMsg, nil
 }
 
+func (m *FileDBManager) RedriveDLQMessages(queue_name string, messageIDs []int64) error {
+	queueInfoID, err := m.getQueueInfoID(queue_name)
+	if queueInfoID < 0 || err != nil {
+		return fmt.Errorf("queue not found: %s", queue_name)
+	}
+	return m.inTx(func(tx *sql.Tx) error {
+		for _, msgID := range messageIDs {
+			// DLQ에서 메시지 조회
+			msg, dlqDetailErr := m.DetailDLQ(tx, queueInfoID, msgID)
+			if dlqDetailErr != nil {
+				return dlqDetailErr
+			}
+			mod, convertErr := util.DelayToSeconds("") // 즉시 재삽입
+			if convertErr != nil {
+				mod = "+0 seconds"
+			}
+			// 새로운 globalID 생성 - 제약조건 회피
+			globalID := util.GenerateGlobalID()
+			// 메시지 재삽입
+			_, insertErr := m.insertMessage(tx, queueInfoID, msg.Msg, globalID, msg.PartitionID, mod)
+			if insertErr != nil {
+				return insertErr
+			}
+			// DLQ에서 메시지 삭제
+			deleteDLQErr := m.deleteDLQByID(tx, queueInfoID, msgID)
+			if deleteDLQErr != nil {
+				return deleteDLQErr
+			}
+		}
+		return nil
+	})
+}
+
 func (m *FileDBManager) inTx(txFunc func(tx *sql.Tx) error) error {
 	tx, err := m.db.Begin()
 	if err != nil {

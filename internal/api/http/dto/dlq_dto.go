@@ -25,3 +25,7 @@ type DLQMessage struct {
 	FailedGroup string `json:"failed_group"`
 	InsertedAt  string `json:"inserted_at"`
 }
+
+type DLQRedriveRequest struct {
+	MessageIDs []int64 `json:"message_ids"`
+}

@@ -130,3 +130,8 @@ func (m *FileDBManager) DetailDLQ(tx *sql.Tx, queueInfoID int64, messageId int64
 	}
 	return dlqMsg, nil
 }
+
+func (m *FileDBManager) deleteDLQByID(tx *sql.Tx, queueInfoID int64, messageID int64) error {
+	_, err := tx.Exec(`DELETE FROM dlq WHERE queue_info_id = ? AND id = ?`, queueInfoID, messageID)
+	return err
+}
