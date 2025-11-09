@@ -405,7 +405,7 @@ func TestFileDBQueueRedriveDLQMessages(t *testing.T) {
 
 	_, _, dlqID := seedSingleDLQMessage(t, queue, queueName)
 
-	if err := queue.RedriveDLQMessages(queueName, []int64{dlqID}); err != nil {
+	if err := queue.RedriveDLQ(queueName, []int64{dlqID}); err != nil {
 		t.Fatalf("RedriveDLQMessages: %v", err)
 	}
 
@@ -431,7 +431,7 @@ func TestFileDBQueueRedriveDLQMessages(t *testing.T) {
 
 func TestFileDBQueueRedriveDLQMessagesQueueNotFound(t *testing.T) {
 	queue := newTestQueue(t)
-	if err := queue.RedriveDLQMessages("missing-queue", []int64{1}); err == nil {
+	if err := queue.RedriveDLQ("missing-queue", []int64{1}); err == nil {
 		t.Fatal("expected error when queue does not exist")
 	}
 }

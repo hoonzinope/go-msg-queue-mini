@@ -21,9 +21,8 @@ func Router(HttpServerInstance *httpServerInstance) *gin.Engine {
 	HttpServerInstance.queueManipulate(r) // create, delete, health
 	HttpServerInstance.produce(r)         // enqueue, enqueue batch
 	HttpServerInstance.consume(r)         // dequeue, ack, nack, renew
-	HttpServerInstance.dlq_inspector(r)   // dlq inspection
 	HttpServerInstance.inspector(r)       // status, statusAll, peek, detail
-	HttpServerInstance.dlq_manager(r)     // dlq redrive
+	HttpServerInstance.dlqRoutes(r)       // dlq inspection and redrive
 	return r
 }
 
@@ -87,21 +86,7 @@ func (HttpServerInstance *httpServerInstance) consume(r *gin.Engine) {
 	}
 }
 
-func (HttpServerInstance *httpServerInstance) dlq_inspector(r *gin.Engine) {
-	dlqHandler := &handler.DLQHandler{
-		QueueInspector: HttpServerInstance.QueueInspector,
-		Logger:         HttpServerInstance.Logger,
-	}
-	dlq_inspector := r.Group("/api/v1/:queue_name")
-	dlq_inspector.Use(AuthMiddleware(HttpServerInstance.ApiKey))
-	dlq_inspector.Use(queueNameMiddleware())
-	{
-		dlq_inspector.GET("/dlq", dlqHandler.ListDLQMessagesHandler)
-		dlq_inspector.GET("/dlq/:message_id", dlqHandler.DetailDLQMessageHandler)
-	}
-}
-
-func (HttpServerInstance *httpServerInstance) dlq_manager(r *gin.Engine) {
+func (HttpServerInstance *httpServerInstance) dlqRoutes(r *gin.Engine) {
 	dlqHandler := &handler.DLQHandler{
 		DLQManager:     HttpServerInstance.DLQManager,
 		QueueInspector: HttpServerInstance.QueueInspector,
@@ -111,6 +96,8 @@ func (HttpServerInstance *httpServerInstance) dlq_manager(r *gin.Engine) {
 	dlq_manager.Use(AuthMiddleware(HttpServerInstance.ApiKey))
 	dlq_manager.Use(queueNameMiddleware())
 	{
+		dlq_manager.GET("/dlq", dlqHandler.ListDLQMessagesHandler)
+		dlq_manager.GET("/dlq/:message_id", dlqHandler.DetailDLQMessageHandler)
 		dlq_manager.POST("/dlq/redrive", dlqHandler.RedriveDLQMessagesHandler)
 	}
 }

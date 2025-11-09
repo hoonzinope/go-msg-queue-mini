@@ -564,10 +564,14 @@ func (m *FileDBManager) RedriveDLQMessages(queue_name string, messageIDs []int64
 			if dlqDetailErr != nil {
 				return dlqDetailErr
 			}
-			mod, _ := util.DelayToSeconds("") // 즉시 재삽입
-			global_id := util.GenerateGlobalID()
+			mod, convertErr := util.DelayToSeconds("") // 즉시 재삽입
+			if convertErr != nil {
+				mod = "+0 seconds"
+			}
+			// 새로운 globalID 생성 - 제약조건 회피
+			globalID := util.GenerateGlobalID()
 			// 메시지 재삽입
-			_, insertErr := m.insertMessage(tx, queueInfoID, msg.Msg, global_id, msg.PartitionID, mod)
+			_, insertErr := m.insertMessage(tx, queueInfoID, msg.Msg, globalID, msg.PartitionID, mod)
 			if insertErr != nil {
 				return insertErr
 			}
