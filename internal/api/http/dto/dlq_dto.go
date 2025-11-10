@@ -29,3 +29,7 @@ type DLQMessage struct {
 type DLQRedriveRequest struct {
 	MessageIDs []int64 `json:"message_ids"`
 }
+
+type DLQDeleteRequest struct {
+	MessageIDs []int64 `json:"message_ids"`
+}

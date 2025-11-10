@@ -99,6 +99,7 @@ func (HttpServerInstance *httpServerInstance) dlqRoutes(r *gin.Engine) {
 		dlq_manager.GET("/dlq", dlqHandler.ListDLQMessagesHandler)
 		dlq_manager.GET("/dlq/:message_id", dlqHandler.DetailDLQMessageHandler)
 		dlq_manager.POST("/dlq/redrive", dlqHandler.RedriveDLQMessagesHandler)
+		dlq_manager.POST("/dlq/delete", dlqHandler.DeleteDLQMessagesHandler)
 	}
 }
 
