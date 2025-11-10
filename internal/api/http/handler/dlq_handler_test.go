@@ -70,13 +70,24 @@ type redriveCall struct {
 	messageIDs []int64
 }
 
+type deleteCall struct {
+	queueName  string
+	messageIDs []int64
+}
+
 type fakeDLQManager struct {
-	calls []redriveCall
-	err   error
+	calls       []redriveCall
+	deleteCalls []deleteCall
+	err         error
 }
 
 func (f *fakeDLQManager) RedriveDLQ(queueName string, messageIDs []int64) error {
 	f.calls = append(f.calls, redriveCall{queueName: queueName, messageIDs: append([]int64(nil), messageIDs...)})
+	return f.err
+}
+
+func (f *fakeDLQManager) DeleteDLQ(queueName string, messageIDs []int64) error {
+	f.deleteCalls = append(f.deleteCalls, deleteCall{queueName: queueName, messageIDs: append([]int64(nil), messageIDs...)})
 	return f.err
 }
 
@@ -321,6 +332,101 @@ func TestRedriveDLQMessagesHandlerManagerError(t *testing.T) {
 
 	if len(manager.calls) != 1 {
 		t.Fatalf("redrive calls = %d, want 1", len(manager.calls))
+	}
+	if len(ctx.Errors) != 1 || ctx.Errors[0].Err != manager.err {
+		t.Fatalf("expected context error %v, got %+v", manager.err, ctx.Errors)
+	}
+}
+
+func TestDeleteDLQMessagesHandlerSuccess(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+
+	body := `{"message_ids":[4,5]}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/demo/dlq/delete", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	ctx.Request = req
+	ctx.Params = gin.Params{{Key: "queue_name", Value: "demo"}}
+
+	manager := &fakeDLQManager{}
+	handler := &DLQHandler{
+		DLQManager: manager,
+		Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	handler.DeleteDLQMessagesHandler(ctx)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+	if len(manager.deleteCalls) != 1 {
+		t.Fatalf("delete calls = %d, want 1", len(manager.deleteCalls))
+	}
+	call := manager.deleteCalls[0]
+	if call.queueName != "demo" {
+		t.Fatalf("queue name = %s, want demo", call.queueName)
+	}
+	if len(call.messageIDs) != 2 || call.messageIDs[0] != 4 || call.messageIDs[1] != 5 {
+		t.Fatalf("message ids = %+v, want [4 5]", call.messageIDs)
+	}
+	var resp map[string]string
+	if err := json.Unmarshal(recorder.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if resp["status"] != "ok" {
+		t.Fatalf("response status = %s, want ok", resp["status"])
+	}
+}
+
+func TestDeleteDLQMessagesHandlerInvalidBody(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+
+	body := `{"message_ids":"oops"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/demo/dlq/delete", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	ctx.Request = req
+	ctx.Params = gin.Params{{Key: "queue_name", Value: "demo"}}
+
+	manager := &fakeDLQManager{}
+	handler := &DLQHandler{
+		DLQManager: manager,
+		Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	handler.DeleteDLQMessagesHandler(ctx)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusBadRequest)
+	}
+	if len(manager.deleteCalls) != 0 {
+		t.Fatalf("delete should not be called on invalid body")
+	}
+}
+
+func TestDeleteDLQMessagesHandlerManagerError(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+
+	body := `{"message_ids":[7]}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/demo/dlq/delete", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	ctx.Request = req
+	ctx.Params = gin.Params{{Key: "queue_name", Value: "demo"}}
+
+	manager := &fakeDLQManager{err: errors.New("delete failed")}
+	handler := &DLQHandler{
+		DLQManager: manager,
+		Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	handler.DeleteDLQMessagesHandler(ctx)
+
+	if len(manager.deleteCalls) != 1 {
+		t.Fatalf("delete calls = %d, want 1", len(manager.deleteCalls))
 	}
 	if len(ctx.Errors) != 1 || ctx.Errors[0].Err != manager.err {
 		t.Fatalf("expected context error %v, got %+v", manager.err, ctx.Errors)

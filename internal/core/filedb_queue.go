@@ -411,3 +411,12 @@ func (q *fileDBQueue) RedriveDLQ(queue_name string, messageIDs []int64) error {
 	}
 	return nil
 }
+
+func (q *fileDBQueue) DeleteDLQ(queue_name string, messageIDs []int64) error {
+	deleteErr := q.manager.DeleteDLQMessages(queue_name, messageIDs)
+	if deleteErr != nil {
+		q.logger.Error("Error deleting DLQ messages", "error", deleteErr)
+		return deleteErr
+	}
+	return nil
+}

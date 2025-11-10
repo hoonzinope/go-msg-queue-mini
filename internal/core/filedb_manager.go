@@ -585,6 +585,23 @@ func (m *FileDBManager) RedriveDLQMessages(queue_name string, messageIDs []int64
 	})
 }
 
+func (m *FileDBManager) DeleteDLQMessages(queue_name string, messageIDs []int64) error {
+	queueInfoID, err := m.getQueueInfoID(queue_name)
+	if queueInfoID < 0 || err != nil {
+		return fmt.Errorf("queue not found: %s", queue_name)
+	}
+	return m.inTx(func(tx *sql.Tx) error {
+		for _, msgID := range messageIDs {
+			// DLQ에서 메시지 삭제
+			deleteDLQErr := m.deleteDLQByID(tx, queueInfoID, msgID)
+			if deleteDLQErr != nil {
+				return deleteDLQErr
+			}
+		}
+		return nil
+	})
+}
+
 func (m *FileDBManager) inTx(txFunc func(tx *sql.Tx) error) error {
 	tx, err := m.db.Begin()
 	if err != nil {
